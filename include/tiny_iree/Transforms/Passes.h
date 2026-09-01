@@ -11,6 +11,7 @@ std::unique_ptr<OperationPass<ModuleOp>> createInputToFlowPass();
 std::unique_ptr<OperationPass<ModuleOp>> createFlowToStreamPass();
 std::unique_ptr<OperationPass<ModuleOp>> createVerifyStreamResourcesPass();
 std::unique_ptr<OperationPass<ModuleOp>> createStreamToHALPass();
+std::unique_ptr<OperationPass<ModuleOp>> createHALToVMPass();
 void registerTinyIREEPasses();
 }  // namespace mlir::tiree
 

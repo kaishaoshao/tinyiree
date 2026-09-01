@@ -4,6 +4,7 @@ project(tiny_iree LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 17 CACHE STRING "C++ standard")
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+set(CMAKE_NO_SYSTEM_FROM_IMPORTED ON)
 
 find_package(MLIR REQUIRED CONFIG)
 find_package(LLVM REQUIRED CONFIG)
@@ -54,14 +55,26 @@ mlir_tablegen(include/tiny_iree/IR/TinyHALTypes.cpp.inc
   -gen-typedef-defs -typedefs-dialect=tiree_hal)
 add_public_tablegen_target(TinyHALOpsIncGen)
 
+set(LLVM_TARGET_DEFINITIONS include/tiny_iree/IR/TinyVMOps.td)
+mlir_tablegen(include/tiny_iree/IR/TinyVMDialect.h.inc -gen-dialect-decls)
+mlir_tablegen(include/tiny_iree/IR/TinyVMDialect.cpp.inc -gen-dialect-defs)
+mlir_tablegen(include/tiny_iree/IR/TinyVMOps.h.inc -gen-op-decls)
+mlir_tablegen(include/tiny_iree/IR/TinyVMOps.cpp.inc -gen-op-defs)
+mlir_tablegen(include/tiny_iree/IR/TinyVMTypes.h.inc
+  -gen-typedef-decls -typedefs-dialect=tiree_vm)
+mlir_tablegen(include/tiny_iree/IR/TinyVMTypes.cpp.inc
+  -gen-typedef-defs -typedefs-dialect=tiree_vm)
+add_public_tablegen_target(TinyVMOpsIncGen)
+
 add_mlir_library(TinyIREECompiler
   lib/IR/Dialects.cpp
   lib/IR/HALTypes.cpp
   lib/IR/Ops.cpp
   lib/IR/StreamTypes.cpp
+  lib/IR/VMTypes.cpp
   lib/Transforms/Passes.cpp
   DEPENDS TinyFlowOpsIncGen TinyHALOpsIncGen TinyInputOpsIncGen
-          TinyStreamOpsIncGen
+          TinyStreamOpsIncGen TinyVMOpsIncGen
   LINK_LIBS PUBLIC
     MLIRBytecodeOpInterface
     MLIRIR
@@ -81,3 +94,17 @@ target_link_libraries(tiny-iree-opt PRIVATE
   MLIROptLib
 )
 mlir_check_all_link_libraries(tiny-iree-opt)
+
+add_llvm_executable(tiny-iree-translate tools/tiny-iree-translate.cpp)
+set_target_properties(tiny-iree-translate PROPERTIES
+  RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+target_include_directories(tiny-iree-translate BEFORE PRIVATE
+  ${LLVM_INCLUDE_DIRS} ${MLIR_INCLUDE_DIRS})
+llvm_update_compile_flags(tiny-iree-translate)
+target_link_libraries(tiny-iree-translate PRIVATE
+  TinyIREECompiler
+  MLIRArithDialect
+  MLIRFuncDialect
+  MLIRParser
+)
+mlir_check_all_link_libraries(tiny-iree-translate)

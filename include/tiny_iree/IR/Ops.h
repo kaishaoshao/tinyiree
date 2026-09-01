@@ -15,6 +15,8 @@
 #include "tiny_iree/IR/TinyHALTypes.h.inc"
 #define GET_TYPEDEF_CLASSES
 #include "tiny_iree/IR/TinyStreamTypes.h.inc"
+#define GET_TYPEDEF_CLASSES
+#include "tiny_iree/IR/TinyVMTypes.h.inc"
 
 #define GET_OP_CLASSES
 #include "tiny_iree/IR/TinyFlowOps.h.inc"
@@ -24,5 +26,7 @@
 #include "tiny_iree/IR/TinyInputOps.h.inc"
 #define GET_OP_CLASSES
 #include "tiny_iree/IR/TinyStreamOps.h.inc"
+#define GET_OP_CLASSES
+#include "tiny_iree/IR/TinyVMOps.h.inc"
 
 #endif  // TINY_IREE_IR_OPS_H_

@@ -285,6 +285,27 @@ LogicalResult DeallocOp::verify() {
 
 }  // namespace mlir::tiree::Stream
 
+namespace mlir::tiree::VM {
+
+LogicalResult AllocOp::verify() {
+  return verifyAllocation(getOperation(), getResourceIdAttr(), getBytesAttr());
+}
+
+LogicalResult CallOp::verify() {
+  if (getOutputRefs().size() != getOutputs().size()) {
+    return emitOpError("output ref count must match result count");
+  }
+  return verifyDispatchResources(getOperation(), getOutputs(),
+                                 getResultBytesAttr(),
+                                 getResultResourcesAttr());
+}
+
+LogicalResult DeallocOp::verify() {
+  return verifyResourceId(getOperation(), getResourceIdAttr());
+}
+
+}  // namespace mlir::tiree::VM
+
 #define GET_OP_CLASSES
 #include "tiny_iree/IR/TinyFlowOps.cpp.inc"
 #define GET_OP_CLASSES
@@ -293,3 +314,5 @@ LogicalResult DeallocOp::verify() {
 #include "tiny_iree/IR/TinyInputOps.cpp.inc"
 #define GET_OP_CLASSES
 #include "tiny_iree/IR/TinyStreamOps.cpp.inc"
+#define GET_OP_CLASSES
+#include "tiny_iree/IR/TinyVMOps.cpp.inc"

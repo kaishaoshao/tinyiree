@@ -254,6 +254,73 @@ class StreamDeallocToHALPattern final
   }
 };
 
+class HALExecutableToVMPattern final
+    : public OpConversionPattern<HAL::ExecutableOp> {
+ public:
+  using OpConversionPattern::OpConversionPattern;
+  LogicalResult matchAndRewrite(
+      HAL::ExecutableOp operation, OpAdaptor,
+      ConversionPatternRewriter &rewriter) const override {
+    rewriter.eraseOp(operation);
+    return success();
+  }
+};
+
+class HALToVMPattern final : public OpConversionPattern<HAL::DispatchOp> {
+ public:
+  using OpConversionPattern::OpConversionPattern;
+  LogicalResult matchAndRewrite(
+      HAL::DispatchOp operation, OpAdaptor adaptor,
+      ConversionPatternRewriter &rewriter) const override {
+    OperationState state(operation.getLoc(), VM::CallOp::getOperationName());
+    state.addOperands(adaptor.getInputs());
+    state.addOperands(adaptor.getOutputBuffers());
+    state.addTypes(operation->getResultTypes());
+    state.addAttribute("callee", operation.getEntryPointAttr());
+    state.addAttribute("device", operation.getDeviceAttr());
+    state.addAttribute("result_bytes", operation.getResultBytesAttr());
+    state.addAttribute("result_resources", operation.getResultResourcesAttr());
+    state.addAttribute(
+        "operandSegmentSizes",
+        rewriter.getDenseI32ArrayAttr(
+            {static_cast<int32_t>(adaptor.getInputs().size()),
+             static_cast<int32_t>(adaptor.getOutputBuffers().size())}));
+    rewriter.replaceOp(operation, rewriter.create(state)->getResults());
+    return success();
+  }
+};
+
+class HALAllocToVMPattern final : public OpConversionPattern<HAL::AllocOp> {
+ public:
+  using OpConversionPattern::OpConversionPattern;
+  LogicalResult matchAndRewrite(
+      HAL::AllocOp operation, OpAdaptor,
+      ConversionPatternRewriter &rewriter) const override {
+    OperationState state(operation.getLoc(), VM::AllocOp::getOperationName());
+    state.addTypes(VM::RefType::get(rewriter.getContext()));
+    state.addAttribute("resource_id", operation.getResourceIdAttr());
+    state.addAttribute("bytes", operation.getBytesAttr());
+    rewriter.replaceOp(operation, rewriter.create(state)->getResults());
+    return success();
+  }
+};
+
+class HALDeallocToVMPattern final
+    : public OpConversionPattern<HAL::DeallocOp> {
+ public:
+  using OpConversionPattern::OpConversionPattern;
+  LogicalResult matchAndRewrite(
+      HAL::DeallocOp operation, OpAdaptor adaptor,
+      ConversionPatternRewriter &rewriter) const override {
+    OperationState state(operation.getLoc(), VM::DeallocOp::getOperationName());
+    state.addOperands(adaptor.getOperands());
+    state.addAttribute("resource_id", operation.getResourceIdAttr());
+    rewriter.create(state);
+    rewriter.eraseOp(operation);
+    return success();
+  }
+};
+
 void scheduleStreamDeallocs(ModuleOp module) {
   struct ResourceUse {
     Value result;
@@ -469,6 +536,32 @@ class StreamToHALPass final
   }
 };
 
+class HALToVMPass final
+    : public PassWrapper<HALToVMPass, OperationPass<ModuleOp>> {
+ public:
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(HALToVMPass)
+  StringRef getArgument() const override { return "tiree-hal-to-vm"; }
+  StringRef getDescription() const override {
+    return "Lower HAL dispatches to tiny VM calls";
+  }
+  void getDependentDialects(DialectRegistry &registry) const override {
+    registry.insert<HAL::TinyHALDialect, VM::TinyVMDialect>();
+  }
+  void runOnOperation() override {
+    ConversionTarget target(getContext());
+    target.addIllegalDialect<HAL::TinyHALDialect>();
+    target.addLegalDialect<VM::TinyVMDialect>();
+    target.markUnknownOpDynamicallyLegal([](Operation *) { return true; });
+    RewritePatternSet patterns(&getContext());
+    patterns.add<HALToVMPattern, HALAllocToVMPattern, HALDeallocToVMPattern,
+                 HALExecutableToVMPattern>(&getContext());
+    if (failed(applyFullConversion(getOperation(), target,
+                                   std::move(patterns)))) {
+      signalPassFailure();
+    }
+  }
+};
+
 }  // namespace
 
 std::unique_ptr<OperationPass<ModuleOp>> createGlobalOptimizationPass() {
@@ -486,12 +579,16 @@ std::unique_ptr<OperationPass<ModuleOp>> createVerifyStreamResourcesPass() {
 std::unique_ptr<OperationPass<ModuleOp>> createStreamToHALPass() {
   return std::make_unique<StreamToHALPass>();
 }
+std::unique_ptr<OperationPass<ModuleOp>> createHALToVMPass() {
+  return std::make_unique<HALToVMPass>();
+}
 void registerTinyIREEPasses() {
   PassRegistration<GlobalOptimizationPass>();
   PassRegistration<InputToFlowPass>();
   PassRegistration<FlowToStreamPass>();
   PassRegistration<VerifyStreamResourcesPass>();
   PassRegistration<StreamToHALPass>();
+  PassRegistration<HALToVMPass>();
   PassPipelineRegistration<>(
       "tiree-compile-pipeline", "Run Input -> Flow",
       [](OpPassManager &manager) {
@@ -499,6 +596,7 @@ void registerTinyIREEPasses() {
         manager.addPass(createInputToFlowPass());
         manager.addPass(createFlowToStreamPass());
         manager.addPass(createStreamToHALPass());
+        manager.addPass(createHALToVMPass());
       });
 }
 

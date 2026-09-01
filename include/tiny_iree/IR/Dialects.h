@@ -7,6 +7,7 @@
 #include "tiny_iree/IR/TinyHALDialect.h.inc"
 #include "tiny_iree/IR/TinyInputDialect.h.inc"
 #include "tiny_iree/IR/TinyStreamDialect.h.inc"
+#include "tiny_iree/IR/TinyVMDialect.h.inc"
 
 namespace mlir::tiree {
 void registerTinyIREEDialects(DialectRegistry &registry);
