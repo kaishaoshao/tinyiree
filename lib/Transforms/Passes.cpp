@@ -5,6 +5,7 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Twine.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/IRMapping.h"
@@ -18,16 +19,41 @@
 namespace mlir::tiree {
 namespace {
 
-Operation *createOperation(OpBuilder &builder, Location location,
-                           StringRef name, TypeRange resultTypes,
-                           ValueRange operands) {
+static Operation *createOperation(OpBuilder &builder, Location location,
+                                  StringRef name, TypeRange resultTypes,
+                                  ValueRange operands,
+                                  ArrayRef<NamedAttribute> attributes) {
   OperationState state(location, name);
   state.addOperands(operands);
   state.addTypes(resultTypes);
+  state.addAttributes(attributes);
   return builder.create(state);
 }
 
-SmallVector<int64_t> calculateResultBytes(TypeRange types) {
+static std::pair<Operation *, Block *> createFlowDispatch(
+    PatternRewriter &rewriter, Location location, TypeRange resultTypes,
+    ValueRange inputs, StringRef kernel) {
+  OperationState state(location, Flow::DispatchOp::getOperationName());
+  state.addOperands(inputs);
+  state.addTypes(resultTypes);
+  state.addAttribute("kernel", rewriter.getStringAttr(kernel));
+  state.addRegion();
+  Operation *dispatch = rewriter.create(state);
+  Region &body = dispatch->getRegion(0);
+  body.push_back(new Block());
+  Block &block = body.front();
+  for (Value input : inputs) block.addArgument(input.getType(), location);
+  return {dispatch, &block};
+}
+
+static void createFlowYield(PatternRewriter &rewriter, Location location,
+                            ValueRange values) {
+  OperationState state(location, Flow::YieldOp::getOperationName());
+  state.addOperands(values);
+  rewriter.create(state);
+}
+
+static SmallVector<int64_t> calculateResultBytes(TypeRange types) {
   SmallVector<int64_t> result;
   for (Type type : types) {
     auto tensorType = cast<RankedTensorType>(type);
@@ -35,9 +61,7 @@ SmallVector<int64_t> calculateResultBytes(TypeRange types) {
     if (!tensorType.hasStaticShape()) {
       result.push_back(-1);
     } else {
-      for (int64_t dimension : tensorType.getShape()) {
-        elementCount *= dimension;
-      }
+      for (int64_t dimension : tensorType.getShape()) elementCount *= dimension;
       result.push_back(elementCount * tensorType.getElementTypeBitWidth() / 8);
     }
   }
@@ -51,6 +75,7 @@ class FuseMatMulAddReluPattern final : public RewritePattern {
 
   LogicalResult matchAndRewrite(Operation *operation,
                                 PatternRewriter &rewriter) const override {
+    if (operation->getParentOfType<Flow::DispatchOp>()) return failure();
     auto matmul = cast<Input::MatMulOp>(operation);
     if (!matmul.getOutput().hasOneUse()) return failure();
     auto add = dyn_cast<Input::AddOp>(*matmul.getOutput().getUsers().begin());
@@ -60,11 +85,13 @@ class FuseMatMulAddReluPattern final : public RewritePattern {
     }
     auto relu = dyn_cast<Input::ReluOp>(*add.getOutput().getUsers().begin());
     if (!relu || relu.getInput() != add.getOutput()) return failure();
+
+    SmallVector<NamedAttribute> attributes;
     Operation *fused = createOperation(
         rewriter, matmul.getLoc(),
         Input::FusedMatMulAddReluOp::getOperationName(),
         relu.getOutput().getType(),
-        {matmul.getLhs(), matmul.getRhs(), add.getRhs()});
+        {matmul.getLhs(), matmul.getRhs(), add.getRhs()}, attributes);
     rewriter.replaceOp(relu, fused->getResults());
     rewriter.eraseOp(add);
     rewriter.eraseOp(matmul);
@@ -81,32 +108,19 @@ class InputOpToFlowPattern final : public ConversionPattern {
   LogicalResult matchAndRewrite(
       Operation *operation, ArrayRef<Value> operands,
       ConversionPatternRewriter &rewriter) const override {
-    OperationState state(operation->getLoc(),
-                         Flow::DispatchOp::getOperationName());
-    state.addOperands(operands);
-    state.addTypes(operation->getResultTypes());
-    state.addAttribute("kernel", rewriter.getStringAttr(kernel));
-    state.addRegion();
-    Operation *dispatch = rewriter.create(state);
-    Region &body = dispatch->getRegion(0);
-    body.push_back(new Block());
-    Block &block = body.front();
-    for (Value input : operands) {
-      block.addArgument(input.getType(), operation->getLoc());
-    }
+    auto [dispatch, block] = createFlowDispatch(
+        rewriter, operation->getLoc(), operation->getResultTypes(), operands,
+        kernel);
     IRMapping mapping;
     for (auto [operand, argument] :
-         llvm::zip_equal(operation->getOperands(), block.getArguments())) {
+         llvm::zip_equal(operation->getOperands(), block->getArguments())) {
       mapping.map(operand, argument);
     }
     {
       OpBuilder::InsertionGuard guard(rewriter);
-      rewriter.setInsertionPointToEnd(&block);
+      rewriter.setInsertionPointToEnd(block);
       Operation *cloned = rewriter.clone(*operation, mapping);
-      OperationState yieldState(operation->getLoc(),
-                                Flow::YieldOp::getOperationName());
-      yieldState.addOperands(cloned->getResults());
-      rewriter.create(yieldState);
+      createFlowYield(rewriter, operation->getLoc(), cloned->getResults());
     }
     rewriter.replaceOp(operation, dispatch->getResults());
     return success();
@@ -130,43 +144,47 @@ class FlowToStreamPattern final : public OpConversionPattern<Flow::DispatchOp> {
         calculateResultBytes(operation->getResultTypes());
     SmallVector<int64_t> resultResources;
     SmallVector<Value> outputResources;
+    resultResources.reserve(resultBytes.size());
     for (int64_t bytes : resultBytes) {
       int64_t resourceId = (*nextResourceId)++;
       resultResources.push_back(resourceId);
-      OperationState allocState(operation.getLoc(),
-                                Stream::AllocOp::getOperationName());
-      allocState.addTypes(Stream::ResourceType::get(rewriter.getContext()));
-      allocState.addAttribute("resource_id",
-                              rewriter.getI64IntegerAttr(resourceId));
-      allocState.addAttribute("bytes", rewriter.getI64IntegerAttr(bytes));
-      outputResources.push_back(rewriter.create(allocState)->getResult(0));
+      SmallVector<NamedAttribute> allocAttributes{
+          rewriter.getNamedAttr("resource_id",
+                                rewriter.getI64IntegerAttr(resourceId)),
+          rewriter.getNamedAttr("bytes", rewriter.getI64IntegerAttr(bytes))};
+      Operation *alloc = createOperation(
+          rewriter, operation.getLoc(), Stream::AllocOp::getOperationName(),
+          Stream::ResourceType::get(rewriter.getContext()), {},
+          allocAttributes);
+      outputResources.push_back(alloc->getResult(0));
     }
     SmallVector<Attribute> workload;
     for (Operation &payload : operation.getBody().front().without_terminator()) {
-      workload.push_back(
-          rewriter.getStringAttr(payload.getName().getStringRef()));
+      workload.push_back(rewriter.getStringAttr(
+          payload.getName().getStringRef()));
     }
     std::string entryPoint =
         (operation.getKernel() + "_" + Twine((*nextEntryPointId)++)).str();
-    OperationState dispatchState(operation.getLoc(),
-                                 Stream::DispatchOp::getOperationName());
-    dispatchState.addOperands(adaptor.getOperands());
-    dispatchState.addOperands(outputResources);
-    dispatchState.addTypes(operation->getResultTypes());
-    dispatchState.addAttribute("kernel", operation.getKernelAttr());
-    dispatchState.addAttribute("entry_point",
-                               rewriter.getStringAttr(entryPoint));
-    dispatchState.addAttribute("workload", rewriter.getArrayAttr(workload));
-    dispatchState.addAttribute(
-        "operandSegmentSizes",
-        rewriter.getDenseI32ArrayAttr(
-            {static_cast<int32_t>(adaptor.getOperands().size()),
-             static_cast<int32_t>(outputResources.size())}));
-    dispatchState.addAttribute("result_bytes",
-                               rewriter.getDenseI64ArrayAttr(resultBytes));
-    dispatchState.addAttribute(
-        "result_resources", rewriter.getDenseI64ArrayAttr(resultResources));
-    Operation *dispatch = rewriter.create(dispatchState);
+    SmallVector<NamedAttribute> attributes{
+        rewriter.getNamedAttr("kernel", operation.getKernelAttr()),
+        rewriter.getNamedAttr("entry_point",
+                              rewriter.getStringAttr(entryPoint)),
+        rewriter.getNamedAttr("workload", rewriter.getArrayAttr(workload)),
+        rewriter.getNamedAttr(
+            "operandSegmentSizes",
+            rewriter.getDenseI32ArrayAttr(
+                {static_cast<int32_t>(adaptor.getOperands().size()),
+                 static_cast<int32_t>(outputResources.size())})),
+        rewriter.getNamedAttr(
+            "result_bytes", rewriter.getDenseI64ArrayAttr(resultBytes)),
+        rewriter.getNamedAttr(
+            "result_resources",
+            rewriter.getDenseI64ArrayAttr(resultResources))};
+    SmallVector<Value> dispatchOperands(adaptor.getOperands());
+    llvm::append_range(dispatchOperands, outputResources);
+    Operation *dispatch = createOperation(
+        rewriter, operation.getLoc(), Stream::DispatchOp::getOperationName(),
+        operation->getResultTypes(), dispatchOperands, attributes);
     rewriter.replaceOp(operation, dispatch->getResults());
     return success();
   }
@@ -189,10 +207,11 @@ class StreamToHALPattern final
         operation.getOutputs().getTypes());
     OperationState executableState(operation.getLoc(),
                                    HAL::ExecutableOp::getOperationName());
-    executableState.addAttribute(SymbolTable::getSymbolAttrName(),
-                                 operation.getEntryPointAttr());
+    executableState.addAttribute(
+        SymbolTable::getSymbolAttrName(), operation.getEntryPointAttr());
     executableState.addAttribute("kernel", operation.getKernelAttr());
-    executableState.addAttribute("function_type", TypeAttr::get(functionType));
+    executableState.addAttribute("function_type",
+                                 TypeAttr::get(functionType));
     executableState.addAttribute("workload", operation.getWorkloadAttr());
     {
       OpBuilder::InsertionGuard guard(rewriter);
@@ -200,56 +219,23 @@ class StreamToHALPattern final
       rewriter.setInsertionPointToStart(module.getBody());
       rewriter.create(executableState);
     }
-    OperationState dispatchState(operation.getLoc(),
-                                 HAL::DispatchOp::getOperationName());
-    dispatchState.addOperands(adaptor.getInputs());
-    dispatchState.addOperands(adaptor.getOutputResources());
-    dispatchState.addTypes(operation->getResultTypes());
-    dispatchState.addAttribute("entry_point", operation.getEntryPointAttr());
-    dispatchState.addAttribute("device", rewriter.getStringAttr("cpu-sync"));
-    dispatchState.addAttribute("result_bytes", operation.getResultBytesAttr());
-    dispatchState.addAttribute("result_resources",
-                               operation.getResultResourcesAttr());
-    dispatchState.addAttribute(
+    SmallVector<NamedAttribute> attributes{
+        rewriter.getNamedAttr("entry_point", operation.getEntryPointAttr()),
+        rewriter.getNamedAttr("device", rewriter.getStringAttr("cpu-sync")),
+        rewriter.getNamedAttr("result_bytes", operation.getResultBytesAttr()),
+        rewriter.getNamedAttr("result_resources",
+                              operation.getResultResourcesAttr())};
+    attributes.push_back(rewriter.getNamedAttr(
         "operandSegmentSizes",
         rewriter.getDenseI32ArrayAttr(
             {static_cast<int32_t>(adaptor.getInputs().size()),
-             static_cast<int32_t>(adaptor.getOutputResources().size())}));
-    Operation *dispatch = rewriter.create(dispatchState);
+             static_cast<int32_t>(adaptor.getOutputResources().size())})));
+    SmallVector<Value> dispatchOperands(adaptor.getInputs());
+    llvm::append_range(dispatchOperands, adaptor.getOutputResources());
+    Operation *dispatch = createOperation(
+        rewriter, operation.getLoc(), HAL::DispatchOp::getOperationName(),
+        operation->getResultTypes(), dispatchOperands, attributes);
     rewriter.replaceOp(operation, dispatch->getResults());
-    return success();
-  }
-};
-
-class StreamAllocToHALPattern final
-    : public OpConversionPattern<Stream::AllocOp> {
- public:
-  using OpConversionPattern::OpConversionPattern;
-  LogicalResult matchAndRewrite(
-      Stream::AllocOp operation, OpAdaptor,
-      ConversionPatternRewriter &rewriter) const override {
-    OperationState state(operation.getLoc(), HAL::AllocOp::getOperationName());
-    state.addTypes(HAL::BufferType::get(rewriter.getContext()));
-    state.addAttribute("resource_id", operation.getResourceIdAttr());
-    state.addAttribute("bytes", operation.getBytesAttr());
-    rewriter.replaceOp(operation, rewriter.create(state)->getResults());
-    return success();
-  }
-};
-
-class StreamDeallocToHALPattern final
-    : public OpConversionPattern<Stream::DeallocOp> {
- public:
-  using OpConversionPattern::OpConversionPattern;
-  LogicalResult matchAndRewrite(
-      Stream::DeallocOp operation, OpAdaptor adaptor,
-      ConversionPatternRewriter &rewriter) const override {
-    OperationState state(operation.getLoc(),
-                         HAL::DeallocOp::getOperationName());
-    state.addOperands(adaptor.getOperands());
-    state.addAttribute("resource_id", operation.getResourceIdAttr());
-    rewriter.create(state);
-    rewriter.eraseOp(operation);
     return success();
   }
 };
@@ -258,6 +244,7 @@ class HALExecutableToVMPattern final
     : public OpConversionPattern<HAL::ExecutableOp> {
  public:
   using OpConversionPattern::OpConversionPattern;
+
   LogicalResult matchAndRewrite(
       HAL::ExecutableOp operation, OpAdaptor,
       ConversionPatternRewriter &rewriter) const override {
@@ -266,26 +253,67 @@ class HALExecutableToVMPattern final
   }
 };
 
+class StreamAllocToHALPattern final
+    : public OpConversionPattern<Stream::AllocOp> {
+ public:
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult matchAndRewrite(
+      Stream::AllocOp operation, OpAdaptor,
+      ConversionPatternRewriter &rewriter) const override {
+    SmallVector<NamedAttribute> attributes{
+        rewriter.getNamedAttr("resource_id", operation.getResourceIdAttr()),
+        rewriter.getNamedAttr("bytes", operation.getBytesAttr())};
+    Operation *alloc = createOperation(
+        rewriter, operation.getLoc(), HAL::AllocOp::getOperationName(),
+        HAL::BufferType::get(rewriter.getContext()), {}, attributes);
+    rewriter.replaceOp(operation, alloc->getResults());
+    return success();
+  }
+};
+
+class StreamDeallocToHALPattern final
+    : public OpConversionPattern<Stream::DeallocOp> {
+ public:
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult matchAndRewrite(
+      Stream::DeallocOp operation, OpAdaptor adaptor,
+      ConversionPatternRewriter &rewriter) const override {
+    SmallVector<NamedAttribute> attributes{
+        rewriter.getNamedAttr("resource_id", operation.getResourceIdAttr())};
+    createOperation(rewriter, operation.getLoc(),
+                    HAL::DeallocOp::getOperationName(), {},
+                    adaptor.getOperands(), attributes);
+    rewriter.eraseOp(operation);
+    return success();
+  }
+};
+
 class HALToVMPattern final : public OpConversionPattern<HAL::DispatchOp> {
  public:
   using OpConversionPattern::OpConversionPattern;
+
   LogicalResult matchAndRewrite(
       HAL::DispatchOp operation, OpAdaptor adaptor,
       ConversionPatternRewriter &rewriter) const override {
-    OperationState state(operation.getLoc(), VM::CallOp::getOperationName());
-    state.addOperands(adaptor.getInputs());
-    state.addOperands(adaptor.getOutputBuffers());
-    state.addTypes(operation->getResultTypes());
-    state.addAttribute("callee", operation.getEntryPointAttr());
-    state.addAttribute("device", operation.getDeviceAttr());
-    state.addAttribute("result_bytes", operation.getResultBytesAttr());
-    state.addAttribute("result_resources", operation.getResultResourcesAttr());
-    state.addAttribute(
+    SmallVector<NamedAttribute> attributes{
+        rewriter.getNamedAttr("callee", operation.getEntryPointAttr()),
+        rewriter.getNamedAttr("device", operation.getDeviceAttr()),
+        rewriter.getNamedAttr("result_bytes", operation.getResultBytesAttr()),
+        rewriter.getNamedAttr("result_resources",
+                              operation.getResultResourcesAttr())};
+    attributes.push_back(rewriter.getNamedAttr(
         "operandSegmentSizes",
         rewriter.getDenseI32ArrayAttr(
             {static_cast<int32_t>(adaptor.getInputs().size()),
-             static_cast<int32_t>(adaptor.getOutputBuffers().size())}));
-    rewriter.replaceOp(operation, rewriter.create(state)->getResults());
+             static_cast<int32_t>(adaptor.getOutputBuffers().size())})));
+    SmallVector<Value> callOperands(adaptor.getInputs());
+    llvm::append_range(callOperands, adaptor.getOutputBuffers());
+    Operation *call = createOperation(
+        rewriter, operation.getLoc(), VM::CallOp::getOperationName(),
+        operation->getResultTypes(), callOperands, attributes);
+    rewriter.replaceOp(operation, call->getResults());
     return success();
   }
 };
@@ -293,14 +321,17 @@ class HALToVMPattern final : public OpConversionPattern<HAL::DispatchOp> {
 class HALAllocToVMPattern final : public OpConversionPattern<HAL::AllocOp> {
  public:
   using OpConversionPattern::OpConversionPattern;
+
   LogicalResult matchAndRewrite(
       HAL::AllocOp operation, OpAdaptor,
       ConversionPatternRewriter &rewriter) const override {
-    OperationState state(operation.getLoc(), VM::AllocOp::getOperationName());
-    state.addTypes(VM::RefType::get(rewriter.getContext()));
-    state.addAttribute("resource_id", operation.getResourceIdAttr());
-    state.addAttribute("bytes", operation.getBytesAttr());
-    rewriter.replaceOp(operation, rewriter.create(state)->getResults());
+    SmallVector<NamedAttribute> attributes{
+        rewriter.getNamedAttr("resource_id", operation.getResourceIdAttr()),
+        rewriter.getNamedAttr("bytes", operation.getBytesAttr())};
+    Operation *alloc = createOperation(
+        rewriter, operation.getLoc(), VM::AllocOp::getOperationName(),
+        VM::RefType::get(rewriter.getContext()), {}, attributes);
+    rewriter.replaceOp(operation, alloc->getResults());
     return success();
   }
 };
@@ -309,19 +340,20 @@ class HALDeallocToVMPattern final
     : public OpConversionPattern<HAL::DeallocOp> {
  public:
   using OpConversionPattern::OpConversionPattern;
+
   LogicalResult matchAndRewrite(
       HAL::DeallocOp operation, OpAdaptor adaptor,
       ConversionPatternRewriter &rewriter) const override {
-    OperationState state(operation.getLoc(), VM::DeallocOp::getOperationName());
-    state.addOperands(adaptor.getOperands());
-    state.addAttribute("resource_id", operation.getResourceIdAttr());
-    rewriter.create(state);
+    SmallVector<NamedAttribute> attributes{
+        rewriter.getNamedAttr("resource_id", operation.getResourceIdAttr())};
+    createOperation(rewriter, operation.getLoc(), VM::DeallocOp::getOperationName(),
+                    {}, adaptor.getOperands(), attributes);
     rewriter.eraseOp(operation);
     return success();
   }
 };
 
-void scheduleStreamDeallocs(ModuleOp module) {
+static void scheduleStreamDeallocs(ModuleOp module) {
   struct ResourceUse {
     Value result;
     Value resource;
@@ -337,6 +369,7 @@ void scheduleStreamDeallocs(ModuleOp module) {
           {result, resource, resourceId, dispatch.getOperation()});
     }
   });
+
   for (const ResourceUse &resource : resources) {
     Operation *lastUse = resource.producer;
     bool escapes = false;
@@ -353,61 +386,122 @@ void scheduleStreamDeallocs(ModuleOp module) {
     if (escapes) continue;
     OpBuilder builder(lastUse);
     builder.setInsertionPointAfter(lastUse);
-    OperationState deallocState(lastUse->getLoc(),
-                                Stream::DeallocOp::getOperationName());
-    deallocState.addOperands(resource.resource);
-    deallocState.addAttribute("resource_id",
-                              builder.getI64IntegerAttr(resource.resourceId));
-    builder.create(deallocState);
+    SmallVector<NamedAttribute> attributes{builder.getNamedAttr(
+        "resource_id", builder.getI64IntegerAttr(resource.resourceId))};
+    createOperation(builder, lastUse->getLoc(),
+                    Stream::DeallocOp::getOperationName(), {},
+                    resource.resource, attributes);
   }
 }
 
-LogicalResult verifyStreamResourcePlan(ModuleOp module) {
+static LogicalResult verifyStreamResourcePlan(ModuleOp module) {
   LogicalResult status = success();
   for (func::FuncOp function : module.getOps<func::FuncOp>()) {
     if (function.empty()) continue;
-    DenseSet<int64_t> liveResources;
+    DenseMap<int64_t, int64_t> liveResources;
     DenseMap<Value, int64_t> resourceValues;
+    DenseMap<Value, int64_t> valueResources;
+    DenseSet<int64_t> escapingResources;
     for (Operation &operation : function.front()) {
       if (auto alloc = dyn_cast<Stream::AllocOp>(operation)) {
-        int64_t id = alloc.getResourceIdAttr().getInt();
-        if (!liveResources.insert(id).second) {
+        int64_t resourceId = alloc.getResourceIdAttr().getInt();
+        if (liveResources.contains(resourceId)) {
           alloc.emitOpError("resource is already live");
           status = failure();
+          continue;
         }
-        resourceValues[alloc.getResource()] = id;
-      } else if (auto dispatch = dyn_cast<Stream::DispatchOp>(operation)) {
-        for (auto [resource, id] : llvm::zip_equal(
-                 dispatch.getOutputResources(),
-                 dispatch.getResultResourcesAttr().asArrayRef())) {
-          if (!resourceValues.contains(resource) ||
-              resourceValues.lookup(resource) != id ||
-              !liveResources.contains(id)) {
-            dispatch.emitOpError("references an invalid output resource");
+        liveResources[resourceId] = alloc.getBytesAttr().getInt();
+        resourceValues[alloc.getResource()] = resourceId;
+        continue;
+      }
+      if (auto dispatch = dyn_cast<Stream::DispatchOp>(operation)) {
+        for (Value input : dispatch.getInputs()) {
+          auto valueResource = valueResources.find(input);
+          if (valueResource != valueResources.end() &&
+              !liveResources.contains(valueResource->second)) {
+            dispatch.emitOpError("reads a resource after it was released");
             status = failure();
           }
         }
-      } else if (auto dealloc = dyn_cast<Stream::DeallocOp>(operation)) {
-        int64_t id = dealloc.getResourceIdAttr().getInt();
-        if (!resourceValues.contains(dealloc.getResource()) ||
-            resourceValues.lookup(dealloc.getResource()) != id ||
-            !liveResources.erase(id)) {
-          dealloc.emitOpError("resource is not live or id does not match");
+        for (auto [resourceValue, resourceId] : llvm::zip_equal(
+                 dispatch.getOutputResources(),
+                 dispatch.getResultResourcesAttr().asArrayRef())) {
+          auto mappedId = resourceValues.find(resourceValue);
+          if (mappedId == resourceValues.end() || mappedId->second != resourceId) {
+            dispatch.emitOpError(
+                "output resource SSA value does not match resource id");
+            status = failure();
+          }
+        }
+        for (auto [result, resourceId, bytes] : llvm::zip_equal(
+                 dispatch.getOutputs(),
+                 dispatch.getResultResourcesAttr().asArrayRef(),
+                 dispatch.getResultBytesAttr().asArrayRef())) {
+          auto resource = liveResources.find(resourceId);
+          if (resource == liveResources.end() || resource->second != bytes) {
+            dispatch.emitOpError(
+                "result references an unallocated or incorrectly sized resource");
+            status = failure();
+            continue;
+          }
+          valueResources[result] = resourceId;
+          if (llvm::any_of(result.getUsers(),
+                           [](Operation *user) {
+                             return isa<func::ReturnOp>(user);
+                           })) {
+            escapingResources.insert(resourceId);
+          }
+        }
+        continue;
+      }
+      if (auto dealloc = dyn_cast<Stream::DeallocOp>(operation)) {
+        int64_t resourceId = dealloc.getResourceIdAttr().getInt();
+        auto mappedId = resourceValues.find(dealloc.getResource());
+        if (mappedId == resourceValues.end() || mappedId->second != resourceId) {
+          dealloc.emitOpError(
+              "resource SSA value does not match resource id");
           status = failure();
         }
+        if (!liveResources.erase(resourceId)) {
+          dealloc.emitOpError("resource is not live");
+          status = failure();
+        }
+      }
+    }
+    for (auto [resourceId, bytes] : liveResources) {
+      (void)bytes;
+      if (!escapingResources.contains(resourceId)) {
+        function.emitOpError("non-output resource remains live: ")
+            << resourceId;
+        status = failure();
       }
     }
   }
   return status;
 }
 
+template <typename SourceDialect, typename TargetDialect,
+          typename... Patterns>
+LogicalResult applyStageConversion(ModuleOp module) {
+  MLIRContext *context = module.getContext();
+  ConversionTarget target(*context);
+  target.addIllegalDialect<SourceDialect>();
+  target.addLegalDialect<TargetDialect>();
+  target.addLegalOp<Flow::YieldOp>();
+  target.markUnknownOpDynamicallyLegal([](Operation *) { return true; });
+  RewritePatternSet patterns(context);
+  patterns.add<Patterns...>(context);
+  return applyFullConversion(module, target, std::move(patterns));
+}
+
 class GlobalOptimizationPass final
     : public PassWrapper<GlobalOptimizationPass, OperationPass<ModuleOp>> {
  public:
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(GlobalOptimizationPass)
+
   StringRef getArgument() const override { return "tiree-global-optimize"; }
   StringRef getDescription() const override {
-    return "Fuse tiny whole-program tensor patterns";
+    return "Run tiny whole-program tensor fusion and global optimization";
   }
   void getDependentDialects(DialectRegistry &registry) const override {
     registry.insert<Input::TinyInputDialect>();
@@ -425,9 +519,10 @@ class InputToFlowPass final
     : public PassWrapper<InputToFlowPass, OperationPass<ModuleOp>> {
  public:
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(InputToFlowPass)
+
   StringRef getArgument() const override { return "tiree-input-to-flow"; }
   StringRef getDescription() const override {
-    return "Form isolated flow dispatches";
+    return "Legalize tiny input ops and form flow dispatches";
   }
   void getDependentDialects(DialectRegistry &registry) const override {
     registry.insert<Input::TinyInputDialect, Flow::TinyFlowDialect>();
@@ -436,14 +531,20 @@ class InputToFlowPass final
     ConversionTarget target(getContext());
     target.addLegalDialect<Flow::TinyFlowDialect>();
     target.markUnknownOpDynamicallyLegal([](Operation *) { return true; });
-    auto isPayload = [](Operation *operation) {
+    auto isFlowPayload = [](Operation *operation) {
       return operation->getParentOfType<Flow::DispatchOp>() != nullptr;
     };
-    target.addDynamicallyLegalOp<Input::MatMulOp>(isPayload);
-    target.addDynamicallyLegalOp<Input::FusedMatMulAddReluOp>(isPayload);
-    target.addDynamicallyLegalOp<Input::AddOp>(isPayload);
-    target.addDynamicallyLegalOp<Input::ReluOp>(isPayload);
-    target.addDynamicallyLegalOp<Input::SoftmaxOp>(isPayload);
+    target.addDynamicallyLegalOp<Input::MatMulOp>(isFlowPayload);
+    target.addDynamicallyLegalOp<Input::FusedMatMulAddReluOp>(isFlowPayload);
+    target.addDynamicallyLegalOp<Input::AddOp>(isFlowPayload);
+    target.addDynamicallyLegalOp<Input::ReluOp>(isFlowPayload);
+    target.addDynamicallyLegalOp<Input::FakeQuantOp>(isFlowPayload);
+    target.addDynamicallyLegalOp<Input::SplitOp>(isFlowPayload);
+    target.addDynamicallyLegalOp<Input::Conv2DOp>(isFlowPayload);
+    target.addDynamicallyLegalOp<Input::MaxPool2DOp>(isFlowPayload);
+    target.addDynamicallyLegalOp<Input::ReshapeOp>(isFlowPayload);
+    target.addDynamicallyLegalOp<Input::TransposeOp>(isFlowPayload);
+    target.addDynamicallyLegalOp<Input::SoftmaxOp>(isFlowPayload);
     RewritePatternSet patterns(&getContext());
     patterns.add<InputOpToFlowPattern>(Input::MatMulOp::getOperationName(),
                                       "matmul", &getContext());
@@ -454,6 +555,18 @@ class InputToFlowPass final
                                       &getContext());
     patterns.add<InputOpToFlowPattern>(Input::ReluOp::getOperationName(),
                                       "relu", &getContext());
+    patterns.add<InputOpToFlowPattern>(Input::FakeQuantOp::getOperationName(),
+                                      "fake_quant", &getContext());
+    patterns.add<InputOpToFlowPattern>(Input::SplitOp::getOperationName(),
+                                      "split", &getContext());
+    patterns.add<InputOpToFlowPattern>(Input::Conv2DOp::getOperationName(),
+                                      "conv2d", &getContext());
+    patterns.add<InputOpToFlowPattern>(Input::MaxPool2DOp::getOperationName(),
+                                      "max_pool2d", &getContext());
+    patterns.add<InputOpToFlowPattern>(Input::ReshapeOp::getOperationName(),
+                                      "reshape", &getContext());
+    patterns.add<InputOpToFlowPattern>(Input::TransposeOp::getOperationName(),
+                                      "transpose", &getContext());
     patterns.add<InputOpToFlowPattern>(Input::SoftmaxOp::getOperationName(),
                                       "softmax", &getContext());
     if (failed(applyFullConversion(getOperation(), target,
@@ -469,27 +582,30 @@ class FlowToStreamPass final
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(FlowToStreamPass)
   StringRef getArgument() const override { return "tiree-flow-to-stream"; }
   StringRef getDescription() const override {
-    return "Plan synchronous stream resources and lifetimes";
+    return "Plan static resources for one synchronous stream";
   }
   void getDependentDialects(DialectRegistry &registry) const override {
     registry.insert<Flow::TinyFlowDialect, Stream::TinyStreamDialect>();
   }
   void runOnOperation() override {
-    ConversionTarget target(getContext());
+    MLIRContext *context = &getContext();
+    ConversionTarget target(*context);
     target.addIllegalDialect<Flow::TinyFlowDialect>();
     target.addLegalDialect<Stream::TinyStreamDialect>();
+    target.addLegalOp<Flow::YieldOp>();
     target.markUnknownOpDynamicallyLegal([](Operation *) { return true; });
     int64_t nextResourceId = 0;
     int64_t nextEntryPointId = 0;
-    RewritePatternSet patterns(&getContext());
-    patterns.add<FlowToStreamPattern>(&getContext(), &nextResourceId,
+    RewritePatternSet patterns(context);
+    patterns.add<FlowToStreamPattern>(context, &nextResourceId,
                                       &nextEntryPointId);
     if (failed(applyFullConversion(getOperation(), target,
                                    std::move(patterns)))) {
       return signalPassFailure();
     }
     scheduleStreamDeallocs(getOperation());
-    if (failed(verifyStreamResourcePlan(getOperation()))) {
+    if (failed(getOperation().verify()) ||
+        failed(verifyStreamResourcePlan(getOperation()))) {
       signalPassFailure();
     }
   }
@@ -504,6 +620,9 @@ class VerifyStreamResourcesPass final
   }
   StringRef getDescription() const override {
     return "Verify tiny stream allocation and lifetime planning";
+  }
+  void getDependentDialects(DialectRegistry &registry) const override {
+    registry.insert<Stream::TinyStreamDialect>();
   }
   void runOnOperation() override {
     if (failed(verifyStreamResourcePlan(getOperation()))) signalPassFailure();
@@ -522,15 +641,12 @@ class StreamToHALPass final
     registry.insert<Stream::TinyStreamDialect, HAL::TinyHALDialect>();
   }
   void runOnOperation() override {
-    ConversionTarget target(getContext());
-    target.addIllegalDialect<Stream::TinyStreamDialect>();
-    target.addLegalDialect<HAL::TinyHALDialect>();
-    target.markUnknownOpDynamicallyLegal([](Operation *) { return true; });
-    RewritePatternSet patterns(&getContext());
-    patterns.add<StreamToHALPattern, StreamAllocToHALPattern,
-                 StreamDeallocToHALPattern>(&getContext());
-    if (failed(applyFullConversion(getOperation(), target,
-                                   std::move(patterns)))) {
+    if (failed(applyStageConversion<Stream::TinyStreamDialect,
+                                    HAL::TinyHALDialect,
+                                    StreamToHALPattern,
+                                    StreamAllocToHALPattern,
+                                    StreamDeallocToHALPattern>(
+        getOperation()))) {
       signalPassFailure();
     }
   }
@@ -548,15 +664,10 @@ class HALToVMPass final
     registry.insert<HAL::TinyHALDialect, VM::TinyVMDialect>();
   }
   void runOnOperation() override {
-    ConversionTarget target(getContext());
-    target.addIllegalDialect<HAL::TinyHALDialect>();
-    target.addLegalDialect<VM::TinyVMDialect>();
-    target.markUnknownOpDynamicallyLegal([](Operation *) { return true; });
-    RewritePatternSet patterns(&getContext());
-    patterns.add<HALToVMPattern, HALAllocToVMPattern, HALDeallocToVMPattern,
-                 HALExecutableToVMPattern>(&getContext());
-    if (failed(applyFullConversion(getOperation(), target,
-                                   std::move(patterns)))) {
+    if (failed(applyStageConversion<HAL::TinyHALDialect, VM::TinyVMDialect,
+                                    HALToVMPattern, HALAllocToVMPattern,
+                                    HALDeallocToVMPattern,
+                                    HALExecutableToVMPattern>(getOperation()))) {
       signalPassFailure();
     }
   }
@@ -582,6 +693,7 @@ std::unique_ptr<OperationPass<ModuleOp>> createStreamToHALPass() {
 std::unique_ptr<OperationPass<ModuleOp>> createHALToVMPass() {
   return std::make_unique<HALToVMPass>();
 }
+
 void registerTinyIREEPasses() {
   PassRegistration<GlobalOptimizationPass>();
   PassRegistration<InputToFlowPass>();
@@ -590,13 +702,14 @@ void registerTinyIREEPasses() {
   PassRegistration<StreamToHALPass>();
   PassRegistration<HALToVMPass>();
   PassPipelineRegistration<>(
-      "tiree-compile-pipeline", "Run Input -> Flow",
-      [](OpPassManager &manager) {
-        manager.addPass(createGlobalOptimizationPass());
-        manager.addPass(createInputToFlowPass());
-        manager.addPass(createFlowToStreamPass());
-        manager.addPass(createStreamToHALPass());
-        manager.addPass(createHALToVMPass());
+      "tiree-compile-pipeline",
+      "Run the complete tiny-iree Input -> Flow -> Stream -> HAL -> VM pipeline",
+      [](OpPassManager &passManager) {
+        passManager.addPass(createGlobalOptimizationPass());
+        passManager.addPass(createInputToFlowPass());
+        passManager.addPass(createFlowToStreamPass());
+        passManager.addPass(createStreamToHALPass());
+        passManager.addPass(createHALToVMPass());
       });
 }
 

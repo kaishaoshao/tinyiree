@@ -85,8 +85,8 @@ def _matmul(kernel: str, inputs: list[str], output: str, fused: bool) -> list[st
 def _elementwise(symbol: str, kernel: str, inputs: list[str], output: str) -> list[str]:
     output_shape = _shape(output)
     rank = len(output_shape)
-    if rank not in (1, 2):
-        raise ValueError(f"{kernel}: only rank-1/rank-2 elementwise kernels are supported")
+    if rank < 1 or rank > 4:
+        raise ValueError(f"{kernel}: only rank-1 through rank-4 tensors are supported")
     dimensions = ", ".join(f"d{index}" for index in range(rank))
     identity = f"affine_map<({dimensions}) -> ({dimensions})>"
     lines = _function_header(symbol, inputs, output)

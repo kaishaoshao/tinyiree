@@ -9,7 +9,8 @@ cmake --build "$repo_dir/build" \
 tmp="$(mktemp -d "${TMPDIR:-/tmp}/tiny-iree-runtime.XXXXXX")"
 trap 'rm -rf "$tmp"' EXIT
 
-python3 "$repo_dir/tools/tiny_iree_compile.py" "$repo_dir/examples/mlp.mlir" \
+python3 "$repo_dir/tools/tiny_iree_compile.py" \
+  "$repo_dir/examples/runtime_inputs.mlir" \
   -o "$tmp/mlp.tiree" --cpu-codegen=scalar
 actual="$($repo_dir/build/bin/tiny-iree-run-module "$tmp/mlp.tiree" \
   --function=predict \

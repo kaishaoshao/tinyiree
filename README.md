@@ -43,3 +43,22 @@ bash tests/stages/00_environment.sh
 
 完整阶段路线见 [docs/LEARNING_PATH.md](docs/LEARNING_PATH.md)。
 
+## 构建与完整回归
+
+```bash
+bash scripts/build.sh
+bash tests/run_all.sh
+```
+
+编译并运行 ONNX MLP：
+
+```bash
+PYTHON=../iree/build_tools/build-host/tiny-iree-venv/bin/python
+$PYTHON tools/generate_mlp_onnx.py -o /tmp/mlp.onnx
+$PYTHON tools/tiny_iree_compile.py /tmp/mlp.onnx -o /tmp/mlp.tiree
+build/bin/tiny-iree-run-module /tmp/mlp.tiree \
+  --function=predict --input=1,2,3,4
+```
+
+预期使用 `native-aot` backend，输出类别 `argmax: 2`。Git 学习操作见
+[docs/GIT_WORKFLOW.md](docs/GIT_WORKFLOW.md)。

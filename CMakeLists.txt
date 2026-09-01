@@ -134,3 +134,7 @@ target_link_libraries(tiny-iree-run-module PRIVATE
   ${CMAKE_DL_LIBS}
 )
 mlir_check_all_link_libraries(tiny-iree-run-module)
+
+add_custom_target(tiny-iree-aot-tools
+  DEPENDS tiny-iree-opt tiny-iree-translate tiny-iree-export-codegen
+          tiny-iree-run-module)
