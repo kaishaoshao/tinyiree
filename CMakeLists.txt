@@ -43,12 +43,25 @@ mlir_tablegen(include/tiny_iree/IR/TinyStreamTypes.cpp.inc
   -gen-typedef-defs -typedefs-dialect=tiree_stream)
 add_public_tablegen_target(TinyStreamOpsIncGen)
 
+set(LLVM_TARGET_DEFINITIONS include/tiny_iree/IR/TinyHALOps.td)
+mlir_tablegen(include/tiny_iree/IR/TinyHALDialect.h.inc -gen-dialect-decls)
+mlir_tablegen(include/tiny_iree/IR/TinyHALDialect.cpp.inc -gen-dialect-defs)
+mlir_tablegen(include/tiny_iree/IR/TinyHALOps.h.inc -gen-op-decls)
+mlir_tablegen(include/tiny_iree/IR/TinyHALOps.cpp.inc -gen-op-defs)
+mlir_tablegen(include/tiny_iree/IR/TinyHALTypes.h.inc
+  -gen-typedef-decls -typedefs-dialect=tiree_hal)
+mlir_tablegen(include/tiny_iree/IR/TinyHALTypes.cpp.inc
+  -gen-typedef-defs -typedefs-dialect=tiree_hal)
+add_public_tablegen_target(TinyHALOpsIncGen)
+
 add_mlir_library(TinyIREECompiler
   lib/IR/Dialects.cpp
+  lib/IR/HALTypes.cpp
   lib/IR/Ops.cpp
   lib/IR/StreamTypes.cpp
   lib/Transforms/Passes.cpp
-  DEPENDS TinyFlowOpsIncGen TinyInputOpsIncGen TinyStreamOpsIncGen
+  DEPENDS TinyFlowOpsIncGen TinyHALOpsIncGen TinyInputOpsIncGen
+          TinyStreamOpsIncGen
   LINK_LIBS PUBLIC
     MLIRBytecodeOpInterface
     MLIRIR

@@ -4,6 +4,7 @@
 #include "mlir/IR/Dialect.h"
 #include "mlir/IR/DialectRegistry.h"
 #include "tiny_iree/IR/TinyFlowDialect.h.inc"
+#include "tiny_iree/IR/TinyHALDialect.h.inc"
 #include "tiny_iree/IR/TinyInputDialect.h.inc"
 #include "tiny_iree/IR/TinyStreamDialect.h.inc"
 

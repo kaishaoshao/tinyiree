@@ -5,15 +5,21 @@
 #include "mlir/Bytecode/BytecodeOpInterface.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinAttributes.h"
+#include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/OpDefinition.h"
+#include "mlir/IR/SymbolTable.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 
+#define GET_TYPEDEF_CLASSES
+#include "tiny_iree/IR/TinyHALTypes.h.inc"
 #define GET_TYPEDEF_CLASSES
 #include "tiny_iree/IR/TinyStreamTypes.h.inc"
 
 #define GET_OP_CLASSES
 #include "tiny_iree/IR/TinyFlowOps.h.inc"
+#define GET_OP_CLASSES
+#include "tiny_iree/IR/TinyHALOps.h.inc"
 #define GET_OP_CLASSES
 #include "tiny_iree/IR/TinyInputOps.h.inc"
 #define GET_OP_CLASSES

@@ -10,6 +10,7 @@ std::unique_ptr<OperationPass<ModuleOp>> createGlobalOptimizationPass();
 std::unique_ptr<OperationPass<ModuleOp>> createInputToFlowPass();
 std::unique_ptr<OperationPass<ModuleOp>> createFlowToStreamPass();
 std::unique_ptr<OperationPass<ModuleOp>> createVerifyStreamResourcesPass();
+std::unique_ptr<OperationPass<ModuleOp>> createStreamToHALPass();
 void registerTinyIREEPasses();
 }  // namespace mlir::tiree
 

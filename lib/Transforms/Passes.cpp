@@ -9,6 +9,7 @@
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/PatternMatch.h"
+#include "mlir/IR/SymbolTable.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Pass/PassRegistry.h"
 #include "mlir/Transforms/DialectConversion.h"
@@ -173,6 +174,84 @@ class FlowToStreamPattern final : public OpConversionPattern<Flow::DispatchOp> {
  private:
   int64_t *nextResourceId;
   int64_t *nextEntryPointId;
+};
+
+class StreamToHALPattern final
+    : public OpConversionPattern<Stream::DispatchOp> {
+ public:
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult matchAndRewrite(
+      Stream::DispatchOp operation, OpAdaptor adaptor,
+      ConversionPatternRewriter &rewriter) const override {
+    auto functionType = FunctionType::get(
+        rewriter.getContext(), operation.getInputs().getTypes(),
+        operation.getOutputs().getTypes());
+    OperationState executableState(operation.getLoc(),
+                                   HAL::ExecutableOp::getOperationName());
+    executableState.addAttribute(SymbolTable::getSymbolAttrName(),
+                                 operation.getEntryPointAttr());
+    executableState.addAttribute("kernel", operation.getKernelAttr());
+    executableState.addAttribute("function_type", TypeAttr::get(functionType));
+    executableState.addAttribute("workload", operation.getWorkloadAttr());
+    {
+      OpBuilder::InsertionGuard guard(rewriter);
+      ModuleOp module = operation->getParentOfType<ModuleOp>();
+      rewriter.setInsertionPointToStart(module.getBody());
+      rewriter.create(executableState);
+    }
+    OperationState dispatchState(operation.getLoc(),
+                                 HAL::DispatchOp::getOperationName());
+    dispatchState.addOperands(adaptor.getInputs());
+    dispatchState.addOperands(adaptor.getOutputResources());
+    dispatchState.addTypes(operation->getResultTypes());
+    dispatchState.addAttribute("entry_point", operation.getEntryPointAttr());
+    dispatchState.addAttribute("device", rewriter.getStringAttr("cpu-sync"));
+    dispatchState.addAttribute("result_bytes", operation.getResultBytesAttr());
+    dispatchState.addAttribute("result_resources",
+                               operation.getResultResourcesAttr());
+    dispatchState.addAttribute(
+        "operandSegmentSizes",
+        rewriter.getDenseI32ArrayAttr(
+            {static_cast<int32_t>(adaptor.getInputs().size()),
+             static_cast<int32_t>(adaptor.getOutputResources().size())}));
+    Operation *dispatch = rewriter.create(dispatchState);
+    rewriter.replaceOp(operation, dispatch->getResults());
+    return success();
+  }
+};
+
+class StreamAllocToHALPattern final
+    : public OpConversionPattern<Stream::AllocOp> {
+ public:
+  using OpConversionPattern::OpConversionPattern;
+  LogicalResult matchAndRewrite(
+      Stream::AllocOp operation, OpAdaptor,
+      ConversionPatternRewriter &rewriter) const override {
+    OperationState state(operation.getLoc(), HAL::AllocOp::getOperationName());
+    state.addTypes(HAL::BufferType::get(rewriter.getContext()));
+    state.addAttribute("resource_id", operation.getResourceIdAttr());
+    state.addAttribute("bytes", operation.getBytesAttr());
+    rewriter.replaceOp(operation, rewriter.create(state)->getResults());
+    return success();
+  }
+};
+
+class StreamDeallocToHALPattern final
+    : public OpConversionPattern<Stream::DeallocOp> {
+ public:
+  using OpConversionPattern::OpConversionPattern;
+  LogicalResult matchAndRewrite(
+      Stream::DeallocOp operation, OpAdaptor adaptor,
+      ConversionPatternRewriter &rewriter) const override {
+    OperationState state(operation.getLoc(),
+                         HAL::DeallocOp::getOperationName());
+    state.addOperands(adaptor.getOperands());
+    state.addAttribute("resource_id", operation.getResourceIdAttr());
+    rewriter.create(state);
+    rewriter.eraseOp(operation);
+    return success();
+  }
 };
 
 void scheduleStreamDeallocs(ModuleOp module) {
@@ -364,6 +443,32 @@ class VerifyStreamResourcesPass final
   }
 };
 
+class StreamToHALPass final
+    : public PassWrapper<StreamToHALPass, OperationPass<ModuleOp>> {
+ public:
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(StreamToHALPass)
+  StringRef getArgument() const override { return "tiree-stream-to-hal"; }
+  StringRef getDescription() const override {
+    return "Select the synchronous CPU HAL device";
+  }
+  void getDependentDialects(DialectRegistry &registry) const override {
+    registry.insert<Stream::TinyStreamDialect, HAL::TinyHALDialect>();
+  }
+  void runOnOperation() override {
+    ConversionTarget target(getContext());
+    target.addIllegalDialect<Stream::TinyStreamDialect>();
+    target.addLegalDialect<HAL::TinyHALDialect>();
+    target.markUnknownOpDynamicallyLegal([](Operation *) { return true; });
+    RewritePatternSet patterns(&getContext());
+    patterns.add<StreamToHALPattern, StreamAllocToHALPattern,
+                 StreamDeallocToHALPattern>(&getContext());
+    if (failed(applyFullConversion(getOperation(), target,
+                                   std::move(patterns)))) {
+      signalPassFailure();
+    }
+  }
+};
+
 }  // namespace
 
 std::unique_ptr<OperationPass<ModuleOp>> createGlobalOptimizationPass() {
@@ -378,17 +483,22 @@ std::unique_ptr<OperationPass<ModuleOp>> createFlowToStreamPass() {
 std::unique_ptr<OperationPass<ModuleOp>> createVerifyStreamResourcesPass() {
   return std::make_unique<VerifyStreamResourcesPass>();
 }
+std::unique_ptr<OperationPass<ModuleOp>> createStreamToHALPass() {
+  return std::make_unique<StreamToHALPass>();
+}
 void registerTinyIREEPasses() {
   PassRegistration<GlobalOptimizationPass>();
   PassRegistration<InputToFlowPass>();
   PassRegistration<FlowToStreamPass>();
   PassRegistration<VerifyStreamResourcesPass>();
+  PassRegistration<StreamToHALPass>();
   PassPipelineRegistration<>(
       "tiree-compile-pipeline", "Run Input -> Flow",
       [](OpPassManager &manager) {
         manager.addPass(createGlobalOptimizationPass());
         manager.addPass(createInputToFlowPass());
         manager.addPass(createFlowToStreamPass());
+        manager.addPass(createStreamToHALPass());
       });
 }
 

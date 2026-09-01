@@ -217,6 +217,50 @@ LogicalResult DispatchOp::verify() {
 
 }  // namespace mlir::tiree::Flow
 
+namespace mlir::tiree::HAL {
+
+LogicalResult ExecutableOp::verify() {
+  auto functionType = dyn_cast<FunctionType>(getFunctionType());
+  if (!functionType || functionType.getNumResults() == 0) {
+    return emitOpError("requires a function type with at least one result");
+  }
+  if (getKernel().empty() || getWorkload().empty()) {
+    return emitOpError("requires a kernel and non-empty workload");
+  }
+  return success();
+}
+
+LogicalResult AllocOp::verify() {
+  return verifyAllocation(getOperation(), getResourceIdAttr(), getBytesAttr());
+}
+
+LogicalResult DispatchOp::verify() {
+  ModuleOp module = getOperation()->getParentOfType<ModuleOp>();
+  auto executable = module ? module.lookupSymbol<ExecutableOp>(getEntryPoint())
+                           : ExecutableOp();
+  if (!executable) {
+    return emitOpError("references a missing executable entry point: ")
+           << getEntryPoint();
+  }
+  if (getOutputBuffers().size() != getOutputs().size()) {
+    return emitOpError("output buffer count must match result count");
+  }
+  auto functionType = cast<FunctionType>(executable.getFunctionType());
+  if (!llvm::equal(functionType.getInputs(), getInputs().getTypes()) ||
+      !llvm::equal(functionType.getResults(), getOutputs().getTypes())) {
+    return emitOpError("dispatch interface does not match executable");
+  }
+  return verifyDispatchResources(getOperation(), getOutputs(),
+                                 getResultBytesAttr(),
+                                 getResultResourcesAttr());
+}
+
+LogicalResult DeallocOp::verify() {
+  return verifyResourceId(getOperation(), getResourceIdAttr());
+}
+
+}  // namespace mlir::tiree::HAL
+
 namespace mlir::tiree::Stream {
 
 LogicalResult AllocOp::verify() {
@@ -243,6 +287,8 @@ LogicalResult DeallocOp::verify() {
 
 #define GET_OP_CLASSES
 #include "tiny_iree/IR/TinyFlowOps.cpp.inc"
+#define GET_OP_CLASSES
+#include "tiny_iree/IR/TinyHALOps.cpp.inc"
 #define GET_OP_CLASSES
 #include "tiny_iree/IR/TinyInputOps.cpp.inc"
 #define GET_OP_CLASSES
