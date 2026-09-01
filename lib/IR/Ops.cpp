@@ -2,6 +2,51 @@
 
 #include "llvm/ADT/STLExtras.h"
 
+namespace mlir::tiree {
+
+LogicalResult verifyResourceId(Operation *operation, IntegerAttr resourceId) {
+  if (resourceId.getInt() < 0) {
+    return operation->emitOpError("resource_id must be non-negative");
+  }
+  return success();
+}
+
+LogicalResult verifyAllocation(Operation *operation, IntegerAttr resourceId,
+                               IntegerAttr bytes) {
+  if (failed(verifyResourceId(operation, resourceId))) return failure();
+  if (bytes.getInt() == 0 || bytes.getInt() < -1) {
+    return operation->emitOpError(
+        "allocation bytes must be positive or -1 for dynamic");
+  }
+  return success();
+}
+
+LogicalResult verifyDispatchResources(Operation *operation,
+                                      ResultRange outputs,
+                                      DenseI64ArrayAttr resultBytes,
+                                      DenseI64ArrayAttr resultResources) {
+  if (outputs.size() != resultBytes.size() ||
+      outputs.size() != resultResources.size()) {
+    return operation->emitOpError(
+        "result_bytes and result_resources must match result count");
+  }
+  for (int64_t bytes : resultBytes.asArrayRef()) {
+    if (bytes == 0 || bytes < -1) {
+      return operation->emitOpError(
+          "result bytes must be positive or -1 for dynamic");
+    }
+  }
+  for (int64_t resourceId : resultResources.asArrayRef()) {
+    if (resourceId < 0) {
+      return operation->emitOpError(
+          "result resource ids must be non-negative");
+    }
+  }
+  return success();
+}
+
+}  // namespace mlir::tiree
+
 namespace mlir::tiree::Input {
 namespace {
 
@@ -172,7 +217,33 @@ LogicalResult DispatchOp::verify() {
 
 }  // namespace mlir::tiree::Flow
 
+namespace mlir::tiree::Stream {
+
+LogicalResult AllocOp::verify() {
+  return verifyAllocation(getOperation(), getResourceIdAttr(), getBytesAttr());
+}
+
+LogicalResult DispatchOp::verify() {
+  if (getEntryPoint().empty() || getWorkload().empty()) {
+    return emitOpError("requires an entry point and non-empty workload");
+  }
+  if (getOutputResources().size() != getOutputs().size()) {
+    return emitOpError("output resource count must match result count");
+  }
+  return verifyDispatchResources(getOperation(), getOutputs(),
+                                 getResultBytesAttr(),
+                                 getResultResourcesAttr());
+}
+
+LogicalResult DeallocOp::verify() {
+  return verifyResourceId(getOperation(), getResourceIdAttr());
+}
+
+}  // namespace mlir::tiree::Stream
+
 #define GET_OP_CLASSES
 #include "tiny_iree/IR/TinyFlowOps.cpp.inc"
 #define GET_OP_CLASSES
 #include "tiny_iree/IR/TinyInputOps.cpp.inc"
+#define GET_OP_CLASSES
+#include "tiny_iree/IR/TinyStreamOps.cpp.inc"

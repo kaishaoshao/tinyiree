@@ -19,11 +19,26 @@ void TinyInputDialect::initialize() {
 }
 }  // namespace mlir::tiree::Input
 
+namespace mlir::tiree::Stream {
+void TinyStreamDialect::initialize() {
+  addTypes<
+#define GET_TYPEDEF_LIST
+#include "tiny_iree/IR/TinyStreamTypes.cpp.inc"
+      >();
+  addOperations<
+#define GET_OP_LIST
+#include "tiny_iree/IR/TinyStreamOps.cpp.inc"
+      >();
+}
+}  // namespace mlir::tiree::Stream
+
 namespace mlir::tiree {
 void registerTinyIREEDialects(DialectRegistry &registry) {
-  registry.insert<Input::TinyInputDialect, Flow::TinyFlowDialect>();
+  registry.insert<Input::TinyInputDialect, Flow::TinyFlowDialect,
+                  Stream::TinyStreamDialect>();
 }
 }  // namespace mlir::tiree
 
 #include "tiny_iree/IR/TinyFlowDialect.cpp.inc"
 #include "tiny_iree/IR/TinyInputDialect.cpp.inc"
+#include "tiny_iree/IR/TinyStreamDialect.cpp.inc"
