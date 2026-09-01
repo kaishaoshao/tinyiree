@@ -121,3 +121,16 @@ target_link_libraries(tiny-iree-export-codegen PRIVATE
   MLIRParser
 )
 mlir_check_all_link_libraries(tiny-iree-export-codegen)
+
+add_llvm_executable(tiny-iree-run-module tools/tiny-iree-run-module.cpp)
+set_target_properties(tiny-iree-run-module PROPERTIES
+  RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+llvm_update_compile_flags(tiny-iree-run-module)
+target_link_libraries(tiny-iree-run-module PRIVATE
+  TinyIREECompiler
+  MLIRArithDialect
+  MLIRFuncDialect
+  MLIRParser
+  ${CMAKE_DL_LIBS}
+)
+mlir_check_all_link_libraries(tiny-iree-run-module)
