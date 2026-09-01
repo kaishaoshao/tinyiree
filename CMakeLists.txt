@@ -25,14 +25,24 @@ mlir_tablegen(include/tiny_iree/IR/TinyInputOps.h.inc -gen-op-decls)
 mlir_tablegen(include/tiny_iree/IR/TinyInputOps.cpp.inc -gen-op-defs)
 add_public_tablegen_target(TinyInputOpsIncGen)
 
+set(LLVM_TARGET_DEFINITIONS include/tiny_iree/IR/TinyFlowOps.td)
+mlir_tablegen(include/tiny_iree/IR/TinyFlowDialect.h.inc -gen-dialect-decls)
+mlir_tablegen(include/tiny_iree/IR/TinyFlowDialect.cpp.inc -gen-dialect-defs)
+mlir_tablegen(include/tiny_iree/IR/TinyFlowOps.h.inc -gen-op-decls)
+mlir_tablegen(include/tiny_iree/IR/TinyFlowOps.cpp.inc -gen-op-defs)
+add_public_tablegen_target(TinyFlowOpsIncGen)
+
 add_mlir_library(TinyIREECompiler
   lib/IR/Dialects.cpp
   lib/IR/Ops.cpp
-  DEPENDS TinyInputOpsIncGen
+  lib/Transforms/Passes.cpp
+  DEPENDS TinyFlowOpsIncGen TinyInputOpsIncGen
   LINK_LIBS PUBLIC
     MLIRBytecodeOpInterface
     MLIRIR
+    MLIRPass
     MLIRSideEffectInterfaces
+    MLIRTransformUtils
 )
 
 add_llvm_executable(tiny-iree-opt tools/tiny-iree-opt.cpp)

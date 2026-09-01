@@ -10,6 +10,8 @@
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 
 #define GET_OP_CLASSES
+#include "tiny_iree/IR/TinyFlowOps.h.inc"
+#define GET_OP_CLASSES
 #include "tiny_iree/IR/TinyInputOps.h.inc"
 
 #endif  // TINY_IREE_IR_OPS_H_
