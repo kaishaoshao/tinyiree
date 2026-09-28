@@ -290,13 +290,13 @@ bool resolveBundle(const std::filesystem::path &bundlePath,
     llvm::errs() << "bundle manifest is missing required fields\n";
     return false;
   }
-#if defined(__APPLE__) && defined(__aarch64__)
+#if defined(__APPLE__) && (defined(__aarch64__) || defined(__arm64__))
   constexpr llvm::StringLiteral expectedTarget = "darwin-arm64";
-#elif defined(__APPLE__) && defined(__x86_64__)
+#elif defined(__APPLE__) && (defined(__x86_64__) || defined(__amd64__))
   constexpr llvm::StringLiteral expectedTarget = "darwin-x86_64";
-#elif defined(__linux__) && defined(__aarch64__)
+#elif defined(__linux__) && (defined(__aarch64__) || defined(__arm64__))
   constexpr llvm::StringLiteral expectedTarget = "linux-aarch64";
-#elif defined(__linux__) && defined(__x86_64__)
+#elif defined(__linux__) && (defined(__x86_64__) || defined(__amd64__))
   constexpr llvm::StringLiteral expectedTarget = "linux-x86_64";
 #else
   constexpr llvm::StringLiteral expectedTarget = "unsupported";

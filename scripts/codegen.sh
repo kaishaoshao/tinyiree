@@ -7,16 +7,26 @@ if [[ $# -ne 2 ]]; then
 fi
 
 repo_dir="$(cd "$(dirname "$0")/.." && pwd)"
-iree_dir="${IREE_DIR:-$(cd "$repo_dir/../iree" && pwd)}"
-iree_build="${IREE_BUILD_DIR:-$iree_dir/build_tools/build-host}"
+source "$repo_dir/scripts/platform.sh"
+
+toolchain_root="$(tiny_iree_find_toolchain_root "$repo_dir")"
+build_dir="$(tiny_iree_build_dir "$repo_dir")"
 hal_mlir="$1"
 output_dir="$2"
 mkdir -p "$output_dir"
 
-exporter="$repo_dir/build/bin/tiny-iree-export-codegen"
-mlir_opt="$iree_build/llvm-project/bin/mlir-opt"
-mlir_translate="$iree_build/llvm-project/bin/mlir-translate"
-llc="$iree_build/llvm-project/bin/llc"
+exporter="$build_dir/bin/tiny-iree-export-codegen"
+mlir_opt="$(tiny_iree_find_llvm_tool "$toolchain_root" mlir-opt)"
+mlir_translate="$(tiny_iree_find_llvm_tool "$toolchain_root" mlir-translate)"
+llc="$(tiny_iree_find_llvm_tool "$toolchain_root" llc)"
+clang="${TINY_IREE_CLANG:-$(command -v clang)}"
+
+if [[ ! -x "$exporter" ]]; then
+  printf 'tiny-iree-export-codegen not found: %s\n' "$exporter" >&2
+  printf 'build it with: cmake --build %q --target tiny-iree-export-codegen\n' \
+    "$build_dir" >&2
+  exit 1
+fi
 
 "$exporter" "$hal_mlir" -o "$output_dir/module.executable.json"
 python3 "$repo_dir/tools/generate_kernel_mlir.py" \
@@ -29,15 +39,11 @@ pipeline='builtin.module(func.func(convert-linalg-to-loops,lower-affine),convert
 "$mlir_translate" "$output_dir/module.executable.llvm.mlir" \
   --mlir-to-llvmir -o "$output_dir/module.executable.ll"
 
-case "$(uname -s)-$(uname -m)" in
-  Darwin-arm64) triple=arm64-apple-macosx13.0.0; library=libtiny_iree_kernels.dylib; link=-dynamiclib ;;
-  Darwin-x86_64) triple=x86_64-apple-macosx13.0.0; library=libtiny_iree_kernels.dylib; link=-dynamiclib ;;
-  Linux-aarch64|Linux-arm64) triple=aarch64-unknown-linux-gnu; library=libtiny_iree_kernels.so; link=-shared ;;
-  Linux-x86_64) triple=x86_64-unknown-linux-gnu; library=libtiny_iree_kernels.so; link=-shared ;;
-  *) echo "unsupported host" >&2; exit 1 ;;
-esac
+triple="$(tiny_iree_target_triple)"
+library="$(tiny_iree_library_name)"
+link="$(tiny_iree_link_mode)"
 
 "$llc" -filetype=obj -mtriple="$triple" -relocation-model=pic \
   "$output_dir/module.executable.ll" -o "$output_dir/module.executable.o"
-clang "$link" "$output_dir/module.executable.o" -o "$output_dir/$library"
+"$clang" "$link" "$output_dir/module.executable.o" -o "$output_dir/$library"
 printf '%s\n' "$output_dir/$library"

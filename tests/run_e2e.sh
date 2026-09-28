@@ -54,7 +54,22 @@ output="$("$2" "$temporary_dir/vm.mlir" \
   --input=1,2,3,4)"
 
 printf '%s\n' "$output"
-grep -q 'result: \[2.655812e-02, 1.461313e-03, 9.719805e-01\]' <<<"$output"
+python3 - "$output" <<'PY'
+import math
+import re
+import sys
+
+match = re.search(r"result: \[([^]]+)\]", sys.argv[1])
+if not match:
+    raise SystemExit("result line not found")
+actual = [float(value) for value in match.group(1).split(",")]
+expected = [2.655812e-2, 1.461313e-3, 9.719805e-1]
+if len(actual) != len(expected) or not all(
+    math.isclose(left, right, rel_tol=1e-6, abs_tol=1e-8)
+    for left, right in zip(actual, expected)
+):
+    raise SystemExit(f"unexpected result: {actual}")
+PY
 grep -q 'argmax: 2' <<<"$output"
 grep -q 'resources: peak=24B live=12B' <<<"$output"
 

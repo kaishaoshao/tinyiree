@@ -2,10 +2,12 @@
 set -euo pipefail
 
 repo_dir="$(cd "$(dirname "$0")/../.." && pwd)"
+source "$repo_dir/scripts/platform.sh"
+build_dir="$(tiny_iree_build_dir "$repo_dir")"
 bash "$repo_dir/scripts/build.sh"
-cmake --build "$repo_dir/build" --target tiny-iree-export-codegen \
+cmake --build "$build_dir" --target tiny-iree-export-codegen \
   -j"${JOBS:-4}"
-opt="$repo_dir/build/bin/tiny-iree-opt"
+opt="$build_dir/bin/tiny-iree-opt"
 tmp="$(mktemp -d "${TMPDIR:-/tmp}/tiny-iree-codegen.XXXXXX")"
 trap 'rm -rf "$tmp"' EXIT
 

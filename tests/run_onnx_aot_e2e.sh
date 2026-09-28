@@ -10,6 +10,7 @@ python="$1"
 opt="$2"
 runtime="$3"
 project_dir="$(cd "$(dirname "$0")/.." && pwd)"
+source "$project_dir/scripts/platform.sh"
 temporary_dir="$(mktemp -d "${TMPDIR:-/tmp}/tiny-iree-onnx.XXXXXX")"
 trap 'rm -rf "$temporary_dir"' EXIT
 
@@ -47,11 +48,30 @@ grep -q 'vector.mask' "$bundle/module.executable.optimized.mlir"
 grep -q 'llvm.func' "$bundle/module.executable.llvm.mlir"
 grep -q '_mlir_ciface_tiree_kernel_matmul_add_relu' \
   "$bundle/module.executable.ll"
-if [[ "$(uname -s)" == "Darwin" ]]; then
-  file "$bundle/libtiny_iree_kernels.dylib" | grep -q 'Mach-O 64-bit dynamically linked shared library arm64'
-  nm -gU "$bundle/libtiny_iree_kernels.dylib" | \
-    grep -q '__mlir_ciface_tiree_kernel_softmax'
-fi
+case "$(tiny_iree_host_id)" in
+  darwin-arm64)
+    library="$bundle/libtiny_iree_kernels.dylib"
+    file "$library" | grep -q 'Mach-O 64-bit.*arm64'
+    nm -gU "$library" | grep -q '__mlir_ciface_tiree_kernel_softmax'
+    ;;
+  darwin-x86_64)
+    library="$bundle/libtiny_iree_kernels.dylib"
+    file "$library" | grep -q 'Mach-O 64-bit.*x86_64'
+    nm -gU "$library" | grep -q '__mlir_ciface_tiree_kernel_softmax'
+    ;;
+  linux-aarch64)
+    library="$bundle/libtiny_iree_kernels.so"
+    file "$library" | grep -Eq 'ELF 64-bit.*(ARM aarch64|aarch64)'
+    nm -D --defined-only "$library" | \
+      grep -q '_mlir_ciface_tiree_kernel_softmax'
+    ;;
+  linux-x86_64)
+    library="$bundle/libtiny_iree_kernels.so"
+    file "$library" | grep -q 'ELF 64-bit.*x86-64'
+    nm -D --defined-only "$library" | \
+      grep -q '_mlir_ciface_tiree_kernel_softmax'
+    ;;
+esac
 
 actual="$($runtime "$bundle" --function=predict --input=1,2,3,4)"
 reference="$($python "$project_dir/tools/run_onnx_reference.py" \

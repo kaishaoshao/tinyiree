@@ -2,10 +2,12 @@
 set -euo pipefail
 
 repo_dir="$(cd "$(dirname "$0")/../.." && pwd)"
+source "$repo_dir/scripts/platform.sh"
+build_dir="$(tiny_iree_build_dir "$repo_dir")"
 bash "$repo_dir/scripts/build.sh"
-cmake --build "$repo_dir/build" --target tiny-iree-translate -j"${JOBS:-4}"
-opt="$repo_dir/build/bin/tiny-iree-opt"
-translate="$repo_dir/build/bin/tiny-iree-translate"
+cmake --build "$build_dir" --target tiny-iree-translate -j"${JOBS:-4}"
+opt="$build_dir/bin/tiny-iree-opt"
+translate="$build_dir/bin/tiny-iree-translate"
 tmp="$(mktemp -d "${TMPDIR:-/tmp}/tiny-iree-vm.XXXXXX")"
 trap 'rm -rf "$tmp"' EXIT
 

@@ -1,8 +1,10 @@
 build/
+build-*/
 .venv/
 __pycache__/
 *.pyc
 *.tiree/
 *.onnx
 .DS_Store
-
+._*
+**/._*

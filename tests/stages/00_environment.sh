@@ -2,17 +2,20 @@
 set -euo pipefail
 
 repo_dir="$(cd "$(dirname "$0")/../.." && pwd)"
-iree_dir="${IREE_DIR:-$(cd "$repo_dir/../iree" && pwd)}"
-build_dir="${IREE_BUILD_DIR:-$iree_dir/build_tools/build-host}"
+source "$repo_dir/scripts/platform.sh"
+toolchain_root="$(tiny_iree_find_toolchain_root "$repo_dir")"
+mlir_dir="$(tiny_iree_mlir_cmake_dir "$toolchain_root")"
+llvm_dir="$(tiny_iree_llvm_cmake_dir "$toolchain_root")"
 
 command -v cmake >/dev/null
 command -v python3 >/dev/null
 command -v clang++ >/dev/null
-test -f "$build_dir/lib/cmake/mlir/MLIRConfig.cmake"
-test -x "$build_dir/llvm-project/bin/mlir-opt"
-test -x "$build_dir/llvm-project/bin/mlir-translate"
-test -x "$build_dir/llvm-project/bin/llc"
+test -f "$mlir_dir/MLIRConfig.cmake"
+test -f "$llvm_dir/LLVMConfig.cmake"
+tiny_iree_find_llvm_tool "$toolchain_root" mlir-opt >/dev/null
+tiny_iree_find_llvm_tool "$toolchain_root" mlir-translate >/dev/null
+tiny_iree_find_llvm_tool "$toolchain_root" llc >/dev/null
 
 printf 'environment: ok\n'
-printf 'iree build: %s\n' "$build_dir"
-
+printf 'host: %s\n' "$(tiny_iree_host_id)"
+printf 'LLVM/MLIR build: %s\n' "$toolchain_root"

@@ -82,6 +82,182 @@ def _matmul(kernel: str, inputs: list[str], output: str, fused: bool) -> list[st
     return lines
 
 
+def _hierarchical_matmul(
+    kernel: str,
+    inputs: list[str],
+    output: str,
+    fused: bool,
+    l2_tile: tuple[int, int, int],
+    l1_tile: tuple[int, int, int],
+    register_tile: tuple[int, int],
+    parallel_threads: int,
+) -> list[str]:
+    if fused:
+        raise ValueError(
+            "hierarchical codegen does not support fused matmul epilogues"
+        )
+    if len(inputs) != 2:
+        raise ValueError(f"{kernel}: invalid input count")
+    lhs_shape = _shape(inputs[0])
+    rhs_shape = _shape(inputs[1])
+    output_shape = _shape(output)
+    if (len(lhs_shape) != 2 or len(rhs_shape) != 2 or
+            len(output_shape) != 2 or min(*lhs_shape, *rhs_shape, *output_shape) < 0):
+        raise ValueError("hierarchical matmul requires static rank-2 tensors")
+    m, k = lhs_shape
+    rhs_k, n = rhs_shape
+    if rhs_k != k or output_shape != [m, n]:
+        raise ValueError("hierarchical matmul has incompatible shapes")
+    l2_m, l2_n, l2_k = l2_tile
+    l1_m, l1_n, l1_k = l1_tile
+    reg_m, reg_n = register_tile
+    sizes = (*l2_tile, *l1_tile, *register_tile)
+    if any(size <= 0 for size in sizes):
+        raise ValueError("hierarchical tile sizes must be positive")
+    if (l2_m % l1_m or l2_n % l1_n or l2_k % l1_k or
+            l1_m % reg_m or l1_n % reg_n):
+        raise ValueError("each outer tile must be divisible by its inner tile")
+    if m % reg_m or n % reg_n:
+        raise ValueError("M and N must be divisible by the register tile")
+
+    lines = _function_header(kernel, inputs, output)
+    constants = {
+        "c0": 0,
+        "c1": 1,
+        "dim_m": m,
+        "dim_n": n,
+        "dim_k": k,
+        "l2_m": l2_m,
+        "l2_n": l2_n,
+        "l2_k": l2_k,
+        "l1_m": l1_m,
+        "l1_n": l1_n,
+        "l1_k": l1_k,
+        "reg_m": reg_m,
+        "reg_n": reg_n,
+    }
+    for name, value in constants.items():
+        lines.append(f"    %{name} = arith.constant {value} : index")
+    lines.extend(
+        [
+            f"    %zero_vec = arith.constant dense<0.0> : vector<{reg_n}xf32>",
+            f"    %threads = arith.constant {parallel_threads} : i32",
+            "    omp.parallel num_threads(%threads : i32) {",
+            "      omp.wsloop {",
+            "        omp.loop_nest (%l2m, %l2n) : index = (%c0, %c0)",
+            "            to (%dim_m, %dim_n) step (%l2_m, %l2_n) collapse(2) {",
+            "      %l2m_limit = arith.addi %l2m, %l2_m : index",
+            "      %l2m_end = arith.minsi %l2m_limit, %dim_m : index",
+            "      %l2n_limit = arith.addi %l2n, %l2_n : index",
+            "      %l2n_end = arith.minsi %l2n_limit, %dim_n : index",
+            "      scf.for %l1m = %l2m to %l2m_end step %l1_m {",
+            "        %l1m_limit = arith.addi %l1m, %l1_m : index",
+            "        %l1m_end = arith.minsi %l1m_limit, %l2m_end : index",
+            "        scf.for %l1n = %l2n to %l2n_end step %l1_n {",
+            "          %l1n_limit = arith.addi %l1n, %l1_n : index",
+            "          %l1n_end = arith.minsi %l1n_limit, %l2n_end : index",
+            "          scf.for %rm = %l1m to %l1m_end step %reg_m {",
+            "            scf.for %rn = %l1n to %l1n_end step %reg_n {",
+        ]
+    )
+    initial_args = ", ".join(f"%acc{row} = %zero_vec" for row in range(reg_m))
+    result_types = ", ".join(f"vector<{reg_n}xf32>" for _ in range(reg_m))
+    results = ", ".join(f"%result{row}" for row in range(reg_m))
+    lines.extend(
+        [
+            f"              {results} = scf.for %l2k = %c0 to %dim_k step %l2_k",
+            f"                  iter_args({initial_args}) -> ({result_types}) {{",
+            "                %l2k_limit = arith.addi %l2k, %l2_k : index",
+            "                %l2k_end = arith.minsi %l2k_limit, %dim_k : index",
+        ]
+    )
+    l2_args = ", ".join(f"%l2acc{row} = %acc{row}" for row in range(reg_m))
+    l1_results = ", ".join(f"%l1result{row}" for row in range(reg_m))
+    lines.extend(
+        [
+            f"                {l1_results} = scf.for %l1k = %l2k to %l2k_end step %l1_k",
+            f"                    iter_args({l2_args}) -> ({result_types}) {{",
+        ]
+    )
+    inner_args = ", ".join(f"%inner{row} = %l2acc{row}" for row in range(reg_m))
+    inner_results = ", ".join(f"%inner_result{row}" for row in range(reg_m))
+    lines.extend(
+        [
+            "                  %l1k_limit = arith.addi %l1k, %l1_k : index",
+            "                  %l1k_end = arith.minsi %l1k_limit, %l2k_end : index",
+            f"                  {inner_results} = scf.for %kk = %l1k to %l1k_end step %c1",
+            f"                      iter_args({inner_args}) -> ({result_types}) {{",
+            f"                    %rhs = vector.load %arg1[%kk, %rn] : {_memref(inputs[1])}, vector<{reg_n}xf32>",
+        ]
+    )
+    yielded = []
+    for row in range(reg_m):
+        lines.extend(
+            [
+                f"                    %row{row} = arith.addi %rm, %c{row} : index"
+                if row in (0, 1)
+                else f"                    %row_offset{row} = arith.constant {row} : index",
+            ]
+        )
+        if row == 0:
+            row_value = "%rm"
+            lines.pop()
+        elif row == 1:
+            row_value = "%row1"
+        else:
+            lines.append(
+                f"                    %row{row} = arith.addi %rm, %row_offset{row} : index"
+            )
+            row_value = f"%row{row}"
+        lines.extend(
+            [
+                f"                    %lhs{row} = memref.load %arg0[{row_value}, %kk] : {_memref(inputs[0])}",
+                f"                    %lhs_vec{row} = vector.broadcast %lhs{row} : f32 to vector<{reg_n}xf32>",
+                f"                    %product{row} = arith.mulf %lhs_vec{row}, %rhs : vector<{reg_n}xf32>",
+                f"                    %sum{row} = arith.addf %inner{row}, %product{row} : vector<{reg_n}xf32>",
+            ]
+        )
+        yielded.append(f"%sum{row}")
+    lines.extend(
+        [
+            f"                    scf.yield {', '.join(yielded)} : {result_types}",
+            "                  }",
+            f"                  scf.yield {', '.join(f'%inner_result{row}' for row in range(reg_m))} : {result_types}",
+            "                }",
+            f"                scf.yield {', '.join(f'%l1result{row}' for row in range(reg_m))} : {result_types}",
+            "              }",
+        ]
+    )
+    for row in range(reg_m):
+        if row == 0:
+            row_value = "%rm"
+        else:
+            lines.append(f"              %store_offset{row} = arith.constant {row} : index")
+            lines.append(
+                f"              %store_row{row} = arith.addi %rm, %store_offset{row} : index"
+            )
+            row_value = f"%store_row{row}"
+        lines.append(
+            f"              vector.store %result{row}, %output[{row_value}, %rn] : {_memref(output)}, vector<{reg_n}xf32>"
+        )
+    lines.extend(
+        [
+            "            }",
+            "          }",
+            "        }",
+            "      }",
+            "          omp.yield",
+            "        }",
+            "      }",
+            "      omp.terminator",
+            "    }",
+            "    return",
+            "  }",
+        ]
+    )
+    return lines
+
+
 def _elementwise(symbol: str, kernel: str, inputs: list[str], output: str) -> list[str]:
     output_shape = _shape(output)
     rank = len(output_shape)
@@ -433,7 +609,15 @@ def _transpose(kernel: str, inputs: list[str], output: str) -> list[str]:
     return lines
 
 
-def generate(input_path: Path, output_path: Path, cpu_codegen: str) -> None:
+def generate(
+    input_path: Path,
+    output_path: Path,
+    cpu_codegen: str,
+    l2_tile: tuple[int, int, int],
+    l1_tile: tuple[int, int, int],
+    register_tile: tuple[int, int],
+    parallel_threads: int,
+) -> None:
     plan = json.loads(input_path.read_text(encoding="utf-8"))
     if plan.get("format") != "tiny-iree-codegen-plan-v1":
         raise ValueError("unsupported tiny-iree codegen plan")
@@ -441,11 +625,18 @@ def generate(input_path: Path, output_path: Path, cpu_codegen: str) -> None:
     if not isinstance(entry_points, list) or not entry_points:
         raise ValueError("codegen plan contains no entry points")
 
-    module_header = (
-        "module attributes {transform.with_named_sequence} {"
-        if cpu_codegen == "vector"
-        else "module {"
-    )
+    if cpu_codegen == "vector":
+        module_header = "module attributes {transform.with_named_sequence} {"
+    elif cpu_codegen == "hierarchical":
+        module_header = (
+            "module attributes {tiree.codegen = {"
+            f"l2_tile = array<i64: {', '.join(map(str, l2_tile))}>, "
+            f"l1_tile = array<i64: {', '.join(map(str, l1_tile))}>, "
+            f"register_tile = array<i64: {', '.join(map(str, register_tile))}>, "
+            f"parallel = true, parallel_threads = {parallel_threads} : i64}}}} {{"
+        )
+    else:
+        module_header = "module {"
     lines = [module_header]
     seen_names: set[str] = set()
     for entry_point in entry_points:
@@ -474,9 +665,23 @@ def generate(input_path: Path, output_path: Path, cpu_codegen: str) -> None:
             raise ValueError(f"{name}: workload does not match kernel {kernel}")
         output = outputs[0]
         if kernel == "matmul_add_relu":
-            body = _matmul(name, inputs, output, fused=True)
+            body = (
+                _hierarchical_matmul(
+                    name, inputs, output, True, l2_tile, l1_tile, register_tile,
+                    parallel_threads
+                )
+                if cpu_codegen == "hierarchical"
+                else _matmul(name, inputs, output, fused=True)
+            )
         elif kernel == "matmul":
-            body = _matmul(name, inputs, output, fused=False)
+            body = (
+                _hierarchical_matmul(
+                    name, inputs, output, False, l2_tile, l1_tile, register_tile,
+                    parallel_threads
+                )
+                if cpu_codegen == "hierarchical"
+                else _matmul(name, inputs, output, fused=False)
+            )
         elif kernel in ("add", "relu", "fake_quant"):
             body = _elementwise(name, kernel, inputs, output)
         elif kernel == "softmax":
@@ -520,10 +725,36 @@ def main() -> None:
     parser.add_argument("input", type=Path, help="tiny HAL codegen plan JSON")
     parser.add_argument("-o", "--output", required=True, type=Path)
     parser.add_argument(
-        "--cpu-codegen", choices=("scalar", "vector"), default="vector"
+        "--cpu-codegen",
+        choices=("scalar", "vector", "hierarchical"),
+        default="vector",
     )
+    parser.add_argument("--l2-tile", default="64,64,32")
+    parser.add_argument("--l1-tile", default="16,16,8")
+    parser.add_argument("--register-tile", default="4,4")
+    parser.add_argument("--parallel-threads", type=int, default=4)
     args = parser.parse_args()
-    generate(args.input, args.output, args.cpu_codegen)
+    if args.parallel_threads <= 0:
+        parser.error("--parallel-threads must be positive")
+
+    def parse_tile(value: str, rank: int, name: str) -> tuple[int, ...]:
+        try:
+            result = tuple(int(item) for item in value.split(","))
+        except ValueError as error:
+            parser.error(f"{name} must contain comma-separated integers: {error}")
+        if len(result) != rank or any(item <= 0 for item in result):
+            parser.error(f"{name} must contain {rank} positive integers")
+        return result
+
+    generate(
+        args.input,
+        args.output,
+        args.cpu_codegen,
+        parse_tile(args.l2_tile, 3, "--l2-tile"),
+        parse_tile(args.l1_tile, 3, "--l1-tile"),
+        parse_tile(args.register_tile, 2, "--register-tile"),
+        args.parallel_threads,
+    )
 
 
 if __name__ == "__main__":

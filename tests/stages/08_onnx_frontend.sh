@@ -2,8 +2,14 @@
 set -euo pipefail
 
 repo_dir="$(cd "$(dirname "$0")/../.." && pwd)"
-iree_dir="${IREE_DIR:-$(cd "$repo_dir/../iree" && pwd)}"
-default_python="$iree_dir/build_tools/build-host/tiny-iree-venv/bin/python"
+source "$repo_dir/scripts/platform.sh"
+toolchain_root="$(tiny_iree_find_toolchain_root "$repo_dir")"
+build_dir="$(tiny_iree_build_dir "$repo_dir")"
+if [[ -x "$repo_dir/.venv/bin/python" ]]; then
+  default_python="$repo_dir/.venv/bin/python"
+else
+  default_python="$toolchain_root/tiny-iree-venv/bin/python"
+fi
 python="${TINY_IREE_PYTHON:-$default_python}"
 if ! "$python" -c 'import onnx, numpy' 2>/dev/null; then
   bash "$repo_dir/scripts/setup_python.sh"
@@ -11,7 +17,7 @@ if ! "$python" -c 'import onnx, numpy' 2>/dev/null; then
 fi
 
 bash "$repo_dir/scripts/build.sh"
-cmake --build "$repo_dir/build" \
+cmake --build "$build_dir" \
   --target tiny-iree-translate tiny-iree-export-codegen tiny-iree-run-module \
   -j"${JOBS:-4}"
 tmp="$(mktemp -d "${TMPDIR:-/tmp}/tiny-iree-onnx.XXXXXX")"
@@ -20,7 +26,7 @@ trap 'rm -rf "$tmp"' EXIT
 "$python" "$repo_dir/tools/generate_mlp_onnx.py" -o "$tmp/mlp.onnx"
 "$python" "$repo_dir/tools/tiny_iree_compile.py" "$tmp/mlp.onnx" \
   -o "$tmp/mlp.tiree" --cpu-codegen=scalar
-actual="$($repo_dir/build/bin/tiny-iree-run-module "$tmp/mlp.tiree" \
+actual="$($build_dir/bin/tiny-iree-run-module "$tmp/mlp.tiree" \
   --function=predict --input=1,2,3,4)"
 reference="$("$python" "$repo_dir/tools/run_onnx_reference.py" \
   "$tmp/mlp.onnx" --input=1,2,3,4)"

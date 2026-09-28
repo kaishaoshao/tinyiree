@@ -2,8 +2,10 @@
 set -euo pipefail
 
 repo_dir="$(cd "$(dirname "$0")/../.." && pwd)"
+source "$repo_dir/scripts/platform.sh"
+build_dir="$(tiny_iree_build_dir "$repo_dir")"
 bash "$repo_dir/scripts/build.sh"
-opt="$repo_dir/build/bin/tiny-iree-opt"
+opt="$build_dir/bin/tiny-iree-opt"
 tmp="$(mktemp -d "${TMPDIR:-/tmp}/tiny-iree-flow.XXXXXX")"
 trap 'rm -rf "$tmp"' EXIT
 
