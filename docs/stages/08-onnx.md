@@ -15,6 +15,12 @@ importer 读取 ONNX protobuf，执行 shape inference，区分模型输入与 i
 - `tools/run_onnx_reference.py`：ONNX `ReferenceEvaluator` 数值基线。
 - `tools/generate_mlp_onnx.py`：可重复生成的最小测试模型。
 - `tests/run_onnx_aot_e2e.sh`：逐阶段产物、AOT 架构、错误 target 和坏字节码测试。
+- `tests/run_frontend_recognition_e2e.sh`：格式选择、图分析、显式 frontend 和未知 op。
+
+完整识别流程与算子支持矩阵见 `docs/MODEL_FRONTEND.md`。需要特别区分：文件
+frontend 由 `.onnx`/`.mlir` 或 `--input-type` 选择；进入 ONNX importer 后，算子才
+根据 `(NodeProto.domain, NodeProto.op_type)`、attribute、shape 和 initializer
+关系被识别。
 
 ## 实验
 
@@ -24,6 +30,8 @@ bash tests/stages/08_onnx_frontend.sh
 bash scripts/setup_python.sh
 WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/tiny-iree-stage08.XXXXXX")"
 .venv/bin/python tools/generate_mlp_onnx.py -o "$WORK_DIR/mlp.onnx"
+.venv/bin/python tools/import_onnx.py --analyze "$WORK_DIR/mlp.onnx"
+.venv/bin/python tools/import_onnx.py --list-supported-ops
 .venv/bin/python tools/import_onnx.py "$WORK_DIR/mlp.onnx" \
   -o "$WORK_DIR/module.input.mlir"
 sed -n '1,120p' "$WORK_DIR/module.input.mlir"

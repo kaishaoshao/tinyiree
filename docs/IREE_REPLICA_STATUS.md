@@ -23,3 +23,8 @@ L2/L1/register 三级 blocking、OpenMP 外层并行和 vector register tile。
 
 这里的 `llvm-cpu` 是统一 backend；Apple M4 与 Linux x86_64 的差异是 target
 triple、动态库格式和 bundle target，而不是两套独立的编译器后端。
+
+前端格式由扩展名或显式 `--input-type` 选择；ONNX 算子识别基于标准
+`(NodeProto.domain, NodeProto.op_type)`，再由 importer 检查 attribute、shape、
+element type 和受支持的局部模式。`--analyze` 只报告图结构和算子身份，完整语义
+是否合法仍以实际导入和 Input dialect verifier 为准。

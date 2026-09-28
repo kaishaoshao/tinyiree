@@ -69,6 +69,8 @@ bash tests/stages/00_environment.sh
 ```
 
 完整阶段路线见 [docs/LEARNING_PATH.md](docs/LEARNING_PATH.md)。
+模型格式选择、ONNX 图识别、Q/DQ 模式匹配和算子限制见
+[模型前端说明](docs/MODEL_FRONTEND.md)。
 
 ## 构建与完整回归
 
