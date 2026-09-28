@@ -71,6 +71,10 @@ bash tests/stages/00_environment.sh
 完整阶段路线见 [docs/LEARNING_PATH.md](docs/LEARNING_PATH.md)。
 模型格式选择、ONNX 图识别、Q/DQ 模式匹配和算子限制见
 [模型前端说明](docs/MODEL_FRONTEND.md)。
+测量方法、二进制接口和运行故障定位分别见
+[真实性能基准](docs/PERFORMANCE_BENCHMARKING.md)、
+[VM 字节码与 Native ABI](docs/VM_BYTECODE_AND_NATIVE_ABI.md)和
+[常见失败诊断](docs/TROUBLESHOOTING.md)。
 
 ## 构建与完整回归
 

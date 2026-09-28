@@ -1,5 +1,8 @@
 # 构建排错
 
+本文只处理工具链与构建问题。模型导入、阶段 IR、bundle、VM bytecode、Native ABI、
+runtime 输入和性能问题见 [常见失败诊断手册](TROUBLESHOOTING.md)。
+
 ## 找不到 MLIRConfig.cmake
 
 设置 IREE 或独立 LLVM build-tree 后重试：

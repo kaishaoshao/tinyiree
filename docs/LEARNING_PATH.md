@@ -19,3 +19,10 @@
 每次只检出一个阶段，先读对应文档，再运行测试，然后修改一个很小的能力。
 推荐实验顺序是：修改 verifier、观察错误；修改 rewrite、比较前后 IR；最后修改
 runtime 并做数值对照。不要同时调试 ONNX、MLIR lowering 和 native ABI。
+
+## 专题附录
+
+- `MODEL_FRONTEND.md`：模型格式、ONNX 图和算子模式如何识别。
+- `VM_BYTECODE_AND_NATIVE_ABI.md`：VM v1 的逐字段布局及 native kernel 边界。
+- `PERFORMANCE_BENCHMARKING.md`：区分冷启动、稳态调用和 kernel 性能的测量方法。
+- `TROUBLESHOOTING.md`：从构建、前端、IR、bundle、VM 到 ABI 的故障定位顺序。
