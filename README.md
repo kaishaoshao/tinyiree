@@ -11,7 +11,7 @@ HAL、VM、CPU codegen 和 runtime 都具有可观察的简化实现。
 - `docs/stages/`：阶段目标、概念、源码入口和实验。
 - `tests/stages/`：只验证本阶段职责的测试脚本。
 - `tests/run_all.sh`：最终端到端回归入口。
-- Git tag `stage-00` 到 `stage-09`：快速切换学习快照。
+- Git tag `stage-00` 到 `stage-10`：快速切换学习快照。
 
 查看历史：
 
@@ -27,13 +27,40 @@ git switch --detach stage-02
 git switch main
 ```
 
-## 本机依赖
+## 本机依赖与支持平台
 
-默认复用相邻 IREE 仓库已经构建的 LLVM/MLIR：
+支持 Linux x86_64、Linux AArch64、macOS x86_64 和 Apple Silicon（包括 M4）。
+生成的 bundle 是本机产物；请在目标机器上重新编译，不要在 x86 与 arm64 间
+直接复制 `.tiree` bundle。
 
-```text
-/Volumes/wsk/code/llvm-mlir/iree/build_tools/build-host
+M4 与 x86 使用同一个 `llvm-cpu` 后端，脚本根据操作系统和 CPU 架构选择不同
+的 target triple、动态库格式和 bundle target。可查看当前选择：
+
+```bash
+bash scripts/platform.sh
 ```
+
+完整判定规则见 [平台与目标说明](docs/PLATFORMS.md)。
+
+脚本会依次查找：
+
+- `IREE_BUILD_DIR` 或 `LLVM_BUILD_DIR` 指定的 build-tree；
+- 相邻 `../iree/build_tools/build-host` 或 `../iree/build`；
+- 相邻 `../llvm-project/build`。
+
+build-tree 需要包含 LLVM/MLIR 的 CMake package，以及 `mlir-opt`、
+`mlir-translate` 和 `llc`。例如：
+
+```bash
+# WSL / Linux x86_64（本仓库当前目录布局可自动发现）
+export LLVM_BUILD_DIR=../llvm-project/build
+
+# Apple M4 + IREE host tools
+export IREE_BUILD_DIR=../iree/build_tools/build-host
+```
+
+以上路径均为相对路径，也可以设置为本机任意位置；仓库内不依赖某个用户的
+磁盘卷或 home 目录。
 
 先执行环境检查：
 
@@ -46,17 +73,29 @@ bash tests/stages/00_environment.sh
 ## 构建与完整回归
 
 ```bash
-bash scripts/build.sh
 bash tests/run_all.sh
 ```
+
+也可以只构建全部编译器和 runtime 工具：
+
+```bash
+bash scripts/build.sh
+```
+
+若仓库携带了另一台机器生成的 `build/CMakeCache.txt`，脚本会自动使用
+`build-<os>-<arch>`，避免覆盖原平台构建。可用 `TINY_IREE_BUILD_DIR` 显式指定。
 
 编译并运行 ONNX MLP：
 
 ```bash
-PYTHON=../iree/build_tools/build-host/tiny-iree-venv/bin/python
-$PYTHON tools/generate_mlp_onnx.py -o /tmp/mlp.onnx
-$PYTHON tools/tiny_iree_compile.py /tmp/mlp.onnx -o /tmp/mlp.tiree
-build/bin/tiny-iree-run-module /tmp/mlp.tiree \
+source scripts/platform.sh
+BUILD_DIR="$(tiny_iree_build_dir "$PWD")"
+bash scripts/build.sh
+bash scripts/setup_python.sh
+PYTHON="$PWD/.venv/bin/python"
+"$PYTHON" tools/generate_mlp_onnx.py -o /tmp/mlp.onnx
+"$PYTHON" tools/tiny_iree_compile.py /tmp/mlp.onnx -o /tmp/mlp.tiree
+"$BUILD_DIR/bin/tiny-iree-run-module" /tmp/mlp.tiree \
   --function=predict --input=1,2,3,4
 ```
 

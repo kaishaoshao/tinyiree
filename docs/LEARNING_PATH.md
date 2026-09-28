@@ -12,10 +12,10 @@
 | `stage-07` | Runtime | VM、allocator 和 native kernel 如何协作？ | 本机推理结果 |
 | `stage-08` | ONNX 前端 | protobuf 计算图如何导入高层 IR？ | ONNX 与 Tiny-IREE 数值对照 |
 | `stage-09` | 完整能力 | 动态 shape、量化、向量化和复用如何贯通？ | 全量回归 |
+| `stage-10` | 多级并行 Tiling | cache blocking 如何映射到 CPU 线程和向量？ | SCF/OpenMP/LLVM IR |
 
 ## 学习纪律
 
 每次只检出一个阶段，先读对应文档，再运行测试，然后修改一个很小的能力。
 推荐实验顺序是：修改 verifier、观察错误；修改 rewrite、比较前后 IR；最后修改
 runtime 并做数值对照。不要同时调试 ONNX、MLIR lowering 和 native ABI。
-

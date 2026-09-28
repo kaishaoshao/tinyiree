@@ -16,6 +16,12 @@ IREE “host program + device executable”结构的关键。
 
 ## 实验
 
-运行 `bash tests/stages/00_environment.sh`，确认 Python、CMake、C++ 编译器和
-相邻 IREE build-tree 中的 MLIR 工具存在。
+先查看平台选择，再检查构建环境：
 
+```bash
+bash scripts/platform.sh
+bash tests/stages/00_environment.sh
+```
+
+环境测试确认 Python、CMake、C++ 编译器，以及 IREE 或独立 LLVM build-tree
+中的 MLIR CMake package、`mlir-opt`、`mlir-translate` 和 `llc` 均可用。

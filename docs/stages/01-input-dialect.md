@@ -16,9 +16,13 @@ operation，以及 verifier 如何检查 tensor element type、rank、shape 和 
 
 ```bash
 bash tests/stages/01_input_dialect.sh
-build/bin/tiny-iree-opt examples/mlp.mlir
+source scripts/platform.sh
+BUILD_DIR="$(tiny_iree_build_dir "$PWD")"
+"$BUILD_DIR/bin/tiny-iree-opt" examples/mlp.mlir
 ```
 
 然后修改 `tests/invalid_input.mlir` 的矩阵维度，观察 verifier 的错误信息。此时
 编译器只能解析和验证高层 IR，还没有 dispatch、资源和执行能力。
 
+观察时区分两层错误：ODS 生成的结构验证负责 operand/result 个数和基础类型约束，
+`lib/IR/Ops.cpp` 中的自定义 verifier 负责矩阵维度、broadcast 和算子语义。

@@ -12,6 +12,13 @@ git diff stage-02..stage-03
 `git diff stage-02..stage-03` 是最推荐的阅读方式：它只展示 Stream 阶段新增的
 Dialect、Pass、测试和文档，不会被最终项目的其他功能干扰。
 
+阶段 10 可能包含一个功能提交和一个文档修订提交；`stage-10` tag 指向两者均
+完成后的可学习快照。查看阶段内的提交可运行：
+
+```bash
+git log --oneline stage-09..stage-10
+```
+
 ## 检出并实验
 
 ```bash
@@ -19,6 +26,9 @@ git switch --detach stage-03
 bash tests/stages/03_stream_resources.sh
 git switch main
 ```
+
+构建产物不进入 Git。切换 tag 后，`scripts/build.sh` 会重新配置当前源码；如果
+现有 CMake cache 来自另一条源码路径，会自动选用平台后缀构建目录。
 
 detached HEAD 很适合只读学习。如果要保存自己的实验，从对应阶段创建分支：
 

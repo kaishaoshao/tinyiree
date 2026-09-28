@@ -9,7 +9,7 @@
 | HAL | Device/executable abstraction | `module.hal.mlir` | cpu-sync/llvm-cpu |
 | VM | Host control program | `module.vm.mlir` | alloc/call/dealloc |
 | Tiny bytecode | VM target | `module.tvm` | 自有 `TIREVM1` 格式 |
-| CPU codegen | Executable backend | Linalg/Vector/LLVM/dylib | 本机 CPU |
+| CPU codegen | Executable backend | Linalg/Vector/OpenMP/LLVM/dylib/so | 本机 CPU |
 | Runtime | VM/HAL loader | 推理结果与 allocator 统计 | 同步执行 |
 
 “缩小复刻”表示每个核心阶段都有独立 IR、真实 lowering、产物和测试，不表示
@@ -18,4 +18,8 @@ GPU 后端、成本模型、自动调优和官方 VM ABI。
 
 已通过的非占位能力包括：多结果 Split 贯穿 native ABI；动态维度在 runtime
 绑定；vector codegen 生成真实 masked vector IR；三段 ReLU 展示 backing storage
-复用；CNN 子集与 ONNX ReferenceEvaluator 逐元素一致。
+复用；CNN 子集与 ONNX ReferenceEvaluator 逐元素一致；静态二维 MatMul 可生成
+L2/L1/register 三级 blocking、OpenMP 外层并行和 vector register tile。
+
+这里的 `llvm-cpu` 是统一 backend；Apple M4 与 Linux x86_64 的差异是 target
+triple、动态库格式和 bundle target，而不是两套独立的编译器后端。

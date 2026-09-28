@@ -16,6 +16,20 @@
 与 verifier、Flow workload、codegen、runtime ABI、数值测试。这样能清楚区分
 “新增算子”和“修改编译器架构”。
 
+## 纵向源码与测试索引
+
+| 能力 | 主要实现 | 端到端测试 |
+| --- | --- | --- |
+| 动态 shape | importer、Stream/VM `bytes = -1`、runtime shape 绑定 | `run_dynamic_e2e.sh` |
+| 多输入/多结果 | Flow/HAL/VM result arrays、native ABI | `run_multi_io_e2e.sh`、`run_multi_result_dispatch_e2e.sh` |
+| Q/DQ fake quant | `TinyInput_FakeQuantOp`、kernel generator | `run_quantized_e2e.sh` |
+| Transform tiling/vector | `generate_kernel_mlir.py` 的 named sequence | `run_tiling_vector_e2e.sh` |
+| buffer 复用 | Stream dealloc 与 `RuntimeAllocator` free list | `run_resource_reuse_e2e.sh` |
+| CNN 子集 | importer、Input verifier、kernel generator | `run_cnn_e2e.sh` |
+
+这里的量化是 Q/DQ 的浮点 fake-quant 语义，不是 i8 MatMul；动态 shape 也只在
+受支持算子和显式输入 shape 绑定范围内成立。
+
 ## 回归
 
 ```bash

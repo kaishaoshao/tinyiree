@@ -9,11 +9,21 @@ bit width 计算字节数，动态 shape 暂记为 `-1`。
 `scheduleStreamDeallocs` 在最后使用点后插入 dealloc，函数输出则逃逸给调用者。
 `tiree-verify-stream-resources` 独立检查重复 ID、双重释放和无效引用。
 
+## 源码入口
+
+- `include/tiny_iree/IR/TinyStreamOps.td`：resource、alloc、dispatch、dealloc。
+- `lib/Transforms/Passes.cpp`：`FlowToStreamPass` 和资源释放点安排。
+- `lib/IR/Ops.cpp`：Stream resource verifier。
+- `tests/invalid_stream_resources.mlir`：释放后使用的反例。
+
 ## 实验
 
 ```bash
 bash tests/stages/03_stream_resources.sh
-build/bin/tiny-iree-opt examples/mlp.mlir --tiree-compile-pipeline
+source scripts/platform.sh
+BUILD_DIR="$(tiny_iree_build_dir "$PWD")"
+"$BUILD_DIR/bin/tiny-iree-opt" examples/mlp.mlir \
+  --pass-pipeline='builtin.module(tiree-global-optimize,tiree-input-to-flow,tiree-flow-to-stream)'
 ```
 
 重点沿着 tensor SSA value 和 resource SSA value 分别追踪，它们表达的是计算结果
