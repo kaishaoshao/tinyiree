@@ -11,7 +11,8 @@ Flow 的职责不是执行算子，而是确定一次独立派发的边界和 AB
 
 ## 源码入口
 
-- `lib/Transforms/Passes.cpp`：`GlobalOptimizationPass` 和 `InputToFlowPass`。
+- `compiler/Transforms/Passes.cpp`：`GlobalOptimizationPass` 和
+  `InputToFlowPass`。
 - `include/tiny_iree/IR/TinyFlowOps.td`：带 `IsolatedFromAbove` trait 的 dispatch。
 - `tests/invalid_flow_region.mlir`：kernel 与 workload 顺序不一致的失败路径。
 

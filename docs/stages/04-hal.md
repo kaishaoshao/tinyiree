@@ -11,8 +11,8 @@ HAL 的抽象职责，而不必先实现异步 command buffer、queue 和多后�
 ## 源码入口
 
 - `include/tiny_iree/IR/TinyHALOps.td`：buffer、executable、dispatch 和生命周期 op。
-- `lib/IR/HALTypes.cpp`：HAL buffer type 的 parse/print。
-- `lib/Transforms/Passes.cpp`：`StreamToHALPass`。
+- `compiler/IR/HALTypes.cpp`：HAL buffer type 的 parse/print。
+- `compiler/Transforms/Passes.cpp`：`StreamToHALPass`。
 - `tools/tiny-iree-export-codegen.cpp`：下一阶段读取的 executable plan 导出器。
 
 ## 实验

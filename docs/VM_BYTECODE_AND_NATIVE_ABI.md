@@ -175,6 +175,8 @@ tensor type、opcode payload、symbol 前缀、memref descriptor、最大 rank�
 - `include/tiny_iree/Runtime/VMBytecode.h`
 - `tools/tiny-iree-translate.cpp`
 - `include/tiny_iree/Runtime/NativeABI.h`
-- `tools/tiny-iree-run-module.cpp`
+- `runtime/Runtime.cpp`
+- `include/tiny_iree/Runtime/Runtime.h`
+- `tools/tiny-iree-run-module.cpp`（薄 CLI wrapper）
 - `tools/generate_kernel_mlir.py`
 - `tests/run_onnx_aot_e2e.sh`

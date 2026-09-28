@@ -12,7 +12,7 @@ VM IR 是 host 控制程序，不包含 MatMul 的循环实现。它只保留 re
 ## 源码入口
 
 - `include/tiny_iree/IR/TinyVMOps.td`：ref、alloc、call、dealloc。
-- `lib/Transforms/Passes.cpp`：`HALToVMPass`。
+- `compiler/Transforms/Passes.cpp`：`HALToVMPass`。
 - `include/tiny_iree/Runtime/VMBytecode.h`：opcode 和磁盘格式结构。
 - `tools/tiny-iree-translate.cpp`：MLIR VM module 的验证与序列化。
 

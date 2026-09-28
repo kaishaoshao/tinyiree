@@ -8,8 +8,8 @@ operation，以及 verifier 如何检查 tensor element type、rank、shape 和 
 ## 源码入口
 
 - `include/tiny_iree/IR/TinyInputOps.td`：声明 MatMul、Add、Relu、Softmax。
-- `lib/IR/Dialects.cpp`：注册 Dialect 和 operation。
-- `lib/IR/Ops.cpp`：实现 shape/type verifier。
+- `compiler/IR/Dialects.cpp`：注册 Dialect 和 operation。
+- `compiler/IR/Ops.cpp`：实现 shape/type verifier。
 - `tools/tiny-iree-opt.cpp`：最小 MLIR optimizer driver。
 
 ## 实验
@@ -25,4 +25,4 @@ BUILD_DIR="$(tiny_iree_build_dir "$PWD")"
 编译器只能解析和验证高层 IR，还没有 dispatch、资源和执行能力。
 
 观察时区分两层错误：ODS 生成的结构验证负责 operand/result 个数和基础类型约束，
-`lib/IR/Ops.cpp` 中的自定义 verifier 负责矩阵维度、broadcast 和算子语义。
+`compiler/IR/Ops.cpp` 中的自定义 verifier 负责矩阵维度、broadcast 和算子语义。

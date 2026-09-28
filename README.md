@@ -4,6 +4,17 @@
 IREE 的全部功能，而是让模型前端、MLIR Dialect、优化、dispatch、资源规划、
 HAL、VM、CPU codegen 和 runtime 都具有可观察的简化实现。
 
+## 代码布局
+
+- `compiler/`：Dialect/type/op 实现和阶段 lowering passes。
+- `runtime/`：bundle loader、VM bytecode interpreter、allocator 和 native dispatch。
+- `include/tiny_iree/`：compiler/runtime 的公共声明及 TableGen 定义。
+- `tools/`：`tiny-iree-opt`、compile/import/codegen 等命令行入口。
+- `tests/`：分阶段测试和端到端 native AOT 回归。
+
+`compiler/README.md` 与 `runtime/README.md` 进一步说明两侧边界；目录划分表示源码
+职责，不会把 M4 和 x86 拆成两套 compiler/runtime。
+
 ## 如何学习
 
 本仓库刻意保留线性 Git 历史。每个提交都是一个学习阶段，并配套：

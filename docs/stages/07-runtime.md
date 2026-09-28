@@ -11,8 +11,10 @@ kernel 只读取输入 memref 并写入预先分配的输出，因此 runtime �
 
 ## 源码入口
 
-- `tools/tiny-iree-run-module.cpp`：manifest 校验、bytecode interpreter、allocator、
-  `dlopen`/`dlsym` 和 `_mlir_ciface_` 调用。
+- `runtime/Runtime.cpp`：manifest 校验、bytecode interpreter、allocator、
+  `dlopen`/`dlsym`、`_mlir_ciface_` 调用和 benchmark loop。
+- `tools/tiny-iree-run-module.cpp`：保持命令行工具名称稳定的薄 `main` wrapper。
+- `include/tiny_iree/Runtime/Runtime.h`：runtime CLI 入口声明。
 - `include/tiny_iree/Runtime/NativeABI.h`：ranked memref descriptor ABI。
 - `tests/invalid_vm_resources.mlir`：无效输出 resource 的失败路径。
 - `examples/runtime_inputs.mlir`：多输入 runtime 示例。

@@ -12,8 +12,8 @@ bit width 计算字节数，动态 shape 暂记为 `-1`。
 ## 源码入口
 
 - `include/tiny_iree/IR/TinyStreamOps.td`：resource、alloc、dispatch、dealloc。
-- `lib/Transforms/Passes.cpp`：`FlowToStreamPass` 和资源释放点安排。
-- `lib/IR/Ops.cpp`：Stream resource verifier。
+- `compiler/Transforms/Passes.cpp`：`FlowToStreamPass` 和资源释放点安排。
+- `compiler/IR/Ops.cpp`：Stream resource verifier。
 - `tests/invalid_stream_resources.mlir`：释放后使用的反例。
 
 ## 实验

@@ -67,12 +67,12 @@ mlir_tablegen(include/tiny_iree/IR/TinyVMTypes.cpp.inc
 add_public_tablegen_target(TinyVMOpsIncGen)
 
 add_mlir_library(TinyIREECompiler
-  lib/IR/Dialects.cpp
-  lib/IR/HALTypes.cpp
-  lib/IR/Ops.cpp
-  lib/IR/StreamTypes.cpp
-  lib/IR/VMTypes.cpp
-  lib/Transforms/Passes.cpp
+  compiler/IR/Dialects.cpp
+  compiler/IR/HALTypes.cpp
+  compiler/IR/Ops.cpp
+  compiler/IR/StreamTypes.cpp
+  compiler/IR/VMTypes.cpp
+  compiler/Transforms/Passes.cpp
   DEPENDS TinyFlowOpsIncGen TinyHALOpsIncGen TinyInputOpsIncGen
           TinyStreamOpsIncGen TinyVMOpsIncGen
   LINK_LIBS PUBLIC
@@ -122,7 +122,9 @@ target_link_libraries(tiny-iree-export-codegen PRIVATE
 )
 mlir_check_all_link_libraries(tiny-iree-export-codegen)
 
-add_llvm_executable(tiny-iree-run-module tools/tiny-iree-run-module.cpp)
+add_llvm_executable(tiny-iree-run-module
+  tools/tiny-iree-run-module.cpp
+  runtime/Runtime.cpp)
 set_target_properties(tiny-iree-run-module PROPERTIES
   RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 llvm_update_compile_flags(tiny-iree-run-module)
