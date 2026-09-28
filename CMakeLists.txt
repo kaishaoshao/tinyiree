@@ -66,76 +66,9 @@ mlir_tablegen(include/tiny_iree/IR/TinyVMTypes.cpp.inc
   -gen-typedef-defs -typedefs-dialect=tiree_vm)
 add_public_tablegen_target(TinyVMOpsIncGen)
 
-add_mlir_library(TinyIREECompiler
-  compiler/IR/Dialects.cpp
-  compiler/IR/HALTypes.cpp
-  compiler/IR/Ops.cpp
-  compiler/IR/StreamTypes.cpp
-  compiler/IR/VMTypes.cpp
-  compiler/Transforms/Passes.cpp
-  DEPENDS TinyFlowOpsIncGen TinyHALOpsIncGen TinyInputOpsIncGen
-          TinyStreamOpsIncGen TinyVMOpsIncGen
-  LINK_LIBS PUBLIC
-    MLIRBytecodeOpInterface
-    MLIRIR
-    MLIRPass
-    MLIRSideEffectInterfaces
-    MLIRTransformUtils
-)
-
-add_llvm_executable(tiny-iree-opt tools/tiny-iree-opt.cpp)
-set_target_properties(tiny-iree-opt PROPERTIES
-  RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
-llvm_update_compile_flags(tiny-iree-opt)
-target_link_libraries(tiny-iree-opt PRIVATE
-  TinyIREECompiler
-  MLIRArithDialect
-  MLIRFuncDialect
-  MLIROptLib
-)
-mlir_check_all_link_libraries(tiny-iree-opt)
-
-add_llvm_executable(tiny-iree-translate tools/tiny-iree-translate.cpp)
-set_target_properties(tiny-iree-translate PROPERTIES
-  RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
-target_include_directories(tiny-iree-translate BEFORE PRIVATE
-  ${LLVM_INCLUDE_DIRS} ${MLIR_INCLUDE_DIRS})
-llvm_update_compile_flags(tiny-iree-translate)
-target_link_libraries(tiny-iree-translate PRIVATE
-  TinyIREECompiler
-  MLIRArithDialect
-  MLIRFuncDialect
-  MLIRParser
-)
-mlir_check_all_link_libraries(tiny-iree-translate)
-
-add_llvm_executable(tiny-iree-export-codegen
-  tools/tiny-iree-export-codegen.cpp)
-set_target_properties(tiny-iree-export-codegen PROPERTIES
-  RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
-llvm_update_compile_flags(tiny-iree-export-codegen)
-target_link_libraries(tiny-iree-export-codegen PRIVATE
-  TinyIREECompiler
-  MLIRArithDialect
-  MLIRFuncDialect
-  MLIRParser
-)
-mlir_check_all_link_libraries(tiny-iree-export-codegen)
-
-add_llvm_executable(tiny-iree-run-module
-  tools/tiny-iree-run-module.cpp
-  runtime/Runtime.cpp)
-set_target_properties(tiny-iree-run-module PROPERTIES
-  RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
-llvm_update_compile_flags(tiny-iree-run-module)
-target_link_libraries(tiny-iree-run-module PRIVATE
-  TinyIREECompiler
-  MLIRArithDialect
-  MLIRFuncDialect
-  MLIRParser
-  ${CMAKE_DL_LIBS}
-)
-mlir_check_all_link_libraries(tiny-iree-run-module)
+add_subdirectory(compiler)
+add_subdirectory(runtime)
+add_subdirectory(tools)
 
 add_custom_target(tiny-iree-aot-tools
   DEPENDS tiny-iree-opt tiny-iree-translate tiny-iree-export-codegen

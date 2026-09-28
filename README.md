@@ -6,14 +6,18 @@ HAL、VM、CPU codegen 和 runtime 都具有可观察的简化实现。
 
 ## 代码布局
 
-- `compiler/`：Dialect/type/op 实现和阶段 lowering passes。
-- `runtime/`：bundle loader、VM bytecode interpreter、allocator 和 native dispatch。
+- `compiler/`：`TinyIREECompiler` 库、Dialect/type/op 实现和阶段 lowering passes。
+- `runtime/`：`TinyIREERuntime` 库、bundle loader、VM bytecode interpreter、allocator
+  和 native dispatch。
 - `include/tiny_iree/`：compiler/runtime 的公共声明及 TableGen 定义。
-- `tools/`：`tiny-iree-opt`、compile/import/codegen 等命令行入口。
+- `tools/`：只构建/承载 `tiny-iree-opt`、translate、codegen export 和 runtime 的
+  CLI 入口；Python compile/import/codegen 脚本是当前教学前端的直接调用接口。
 - `tests/`：分阶段测试和端到端 native AOT 回归。
 
-`compiler/README.md` 与 `runtime/README.md` 进一步说明两侧边界；目录划分表示源码
-职责，不会把 M4 和 x86 拆成两套 compiler/runtime。
+根目录只负责共享配置与 TableGen；三个子目录各有 `CMakeLists.txt`，分别拥有
+compiler library、runtime library 与 executable wrappers。`compiler/README.md` 与
+`runtime/README.md` 进一步说明两侧边界；目录划分表示源码职责，不会把 M4 和 x86
+拆成两套 compiler/runtime。
 
 ## 如何学习
 
