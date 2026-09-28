@@ -9,6 +9,8 @@ HAL、VM、CPU codegen 和 runtime 都具有可观察的简化实现。
 - `compiler/`：`TinyIREECompiler` 库、Dialect/type/op 实现和阶段 lowering passes。
 - `runtime/`：`TinyIREERuntime` 库、bundle loader、VM bytecode interpreter、allocator
   和 native dispatch。
+- `lib/`：编译器共享库的分发职责说明；实际 ABI 实现在 `compiler/API/`，构建产物
+  为 `build-<platform>/lib/libTinyIREECompiler`。
 - `include/tiny_iree/`：compiler/runtime 的公共声明及 TableGen 定义。
 - `tools/`：只构建/承载 `tiny-iree-opt`、translate、codegen export 和 runtime 的
   CLI 入口；Python compile/import/codegen 脚本是当前教学前端的直接调用接口。

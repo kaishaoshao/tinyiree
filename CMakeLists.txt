@@ -71,5 +71,6 @@ add_subdirectory(runtime)
 add_subdirectory(tools)
 
 add_custom_target(tiny-iree-aot-tools
-  DEPENDS tiny-iree-opt tiny-iree-translate tiny-iree-export-codegen
+  DEPENDS TinyIREECompilerAPI
+          tiny-iree-opt tiny-iree-translate tiny-iree-export-codegen
           tiny-iree-run-module)
