@@ -17,6 +17,20 @@ def _run(command: list[str]) -> None:
     subprocess.run(command, check=True)
 
 
+def _resolve_input_type(input_path: Path, requested: str) -> str:
+    if requested != "auto":
+        return requested
+    suffix = input_path.suffix.lower()
+    if suffix == ".onnx":
+        return "onnx"
+    if suffix == ".mlir":
+        return "mlir"
+    raise ValueError(
+        f"cannot infer input type from {input_path.name!r}; "
+        "use --input-type=onnx or --input-type=mlir"
+    )
+
+
 def _host_configuration() -> tuple[str, str, str]:
     system = platform.system()
     machine = platform.machine().lower()
@@ -100,6 +114,7 @@ def compile_bundle(
     mlir_opt_path: Path,
     mlir_translate_path: Path,
     llc_path: Path,
+    input_type: str,
     function_name: str,
     cpu_codegen: str,
     target_backend: str,
@@ -116,7 +131,7 @@ def compile_bundle(
     if target_backend != "llvm-cpu":
         raise ValueError(f"unsupported HAL target backend: {target_backend}")
 
-    if input_path.suffix.lower() == ".onnx":
+    if input_type == "onnx":
         _run(
             [
                 sys.executable,
@@ -128,10 +143,10 @@ def compile_bundle(
                 function_name,
             ]
         )
-    elif input_path.suffix.lower() == ".mlir":
+    elif input_type == "mlir":
         shutil.copyfile(input_path, input_mlir)
     else:
-        raise ValueError("input must be an .onnx or .mlir file")
+        raise ValueError(f"unsupported input type: {input_type}")
 
     optimized_input_mlir = output_path / "module.global-opt.mlir"
     flow_mlir = output_path / "module.flow.mlir"
@@ -315,6 +330,7 @@ def compile_bundle(
     manifest = {
         "format": "tiny-iree-bundle-v1",
         "source": str(input_path.resolve()),
+        "input_type": input_type,
         "function": function_name,
         "target": host_id,
         "vm_module": vm_bytecode.name,
@@ -356,6 +372,7 @@ def compile_bundle(
         json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
     )
     print(f"compiled {input_path} -> {output_path}")
+    print(f"input type: {input_type}")
     print(f"target: {manifest['target']}")
     print("entry points: " + ", ".join(entry_points))
 
@@ -374,6 +391,12 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("input", type=Path)
     parser.add_argument("-o", "--output", required=True, type=Path)
+    parser.add_argument(
+        "--input-type",
+        choices=("auto", "onnx", "mlir"),
+        default="auto",
+        help="input frontend; auto selects from .onnx or .mlir",
+    )
     parser.add_argument("--opt", type=Path, default=default_opt)
     parser.add_argument("--translate", type=Path, default=default_translate)
     parser.add_argument("--export-codegen", type=Path, default=default_export_codegen)
@@ -403,6 +426,10 @@ def main() -> None:
         "--target-backend", choices=("llvm-cpu",), default="llvm-cpu"
     )
     args = parser.parse_args()
+    try:
+        input_type = _resolve_input_type(args.input, args.input_type)
+    except ValueError as error:
+        parser.error(str(error))
     if args.parallel_threads <= 0:
         parser.error("--parallel-threads must be positive")
     for name, path in (
@@ -429,6 +456,7 @@ def main() -> None:
         args.mlir_opt,
         args.mlir_translate,
         args.llc,
+        input_type,
         args.function,
         args.cpu_codegen,
         args.target_backend,

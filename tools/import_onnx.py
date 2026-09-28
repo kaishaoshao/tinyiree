@@ -14,10 +14,22 @@ from onnx import TensorProto, helper, numpy_helper, shape_inference
 
 
 SUPPORTED_OPS = {
-    "MatMul", "Gemm", "Add", "Relu", "Softmax",
-    "QuantizeLinear", "DequantizeLinear", "Split", "Conv", "MaxPool",
-    "Flatten", "Reshape", "Transpose",
+    "MatMul": "rank-2 f32 tensors with (MxK) x (KxN) -> (MxN)",
+    "Gemm": "MatMul plus optional bias; no transpose; alpha=beta=1",
+    "Add": "equal f32 shapes or final-dimension bias broadcast",
+    "Relu": "ranked f32 tensor with unchanged shape",
+    "Softmax": "ranked f32 tensor over the final dimension",
+    "QuantizeLinear": "matched per-tensor signed-int8 Q/DQ pair",
+    "DequantizeLinear": "matched per-tensor signed-int8 Q/DQ pair",
+    "Split": "final dimension, exactly two equal-shaped outputs",
+    "Conv": "static NCHW, bias required, valid stride-one, group=1",
+    "MaxPool": "static NCHW, 2x2 kernel, stride two, no padding",
+    "Flatten": "axis=1; lowered to a static reshape",
+    "Reshape": "static input/output with equal element counts",
+    "Transpose": "static rank-4 NCHW to NHWC only",
 }
+
+STANDARD_ONNX_DOMAINS = {"", "ai.onnx"}
 
 
 def _tensor_type(shape: list[int]) -> str:
@@ -73,9 +85,59 @@ def _symbol(name: str, fallback: str) -> str:
     return sanitized
 
 
-def import_onnx(input_path: Path, output_path: Path, function_name: str) -> None:
+def _load_model(input_path: Path) -> Any:
     model = shape_inference.infer_shapes(onnx.load(input_path))
     onnx.checker.check_model(model)
+    return model
+
+
+def _node_identity(node: Any) -> str:
+    return f"{node.domain or 'ai.onnx'}::{node.op_type}"
+
+
+def _is_supported_node(node: Any) -> bool:
+    return node.domain in STANDARD_ONNX_DOMAINS and node.op_type in SUPPORTED_OPS
+
+
+def _shape_text(value_info: Any) -> str:
+    return "x".join("?" if dim < 0 else str(dim)
+                    for dim in _shape_from_value_info(value_info)) or "scalar"
+
+
+def analyze_onnx(input_path: Path) -> None:
+    model = _load_model(input_path)
+    graph = model.graph
+    initializer_names = {initializer.name for initializer in graph.initializer}
+    graph_inputs = [value for value in graph.input
+                    if value.name not in initializer_names]
+
+    print("format: onnx")
+    for opset in model.opset_import:
+        domain = opset.domain or "ai.onnx"
+        print(f"opset: {domain}={opset.version}")
+    print("graph inputs:")
+    for value in graph_inputs:
+        print(f"  {value.name}: {_shape_text(value)}")
+    print(f"initializers: {len(graph.initializer)}")
+    for initializer in graph.initializer:
+        shape = "x".join(str(dim) for dim in initializer.dims) or "scalar"
+        print(f"  {initializer.name}: {shape}")
+    print("nodes:")
+    for index, node in enumerate(graph.node):
+        supported = "yes" if _is_supported_node(node) else "no"
+        inputs = ", ".join(name for name in node.input if name)
+        outputs = ", ".join(node.output)
+        print(
+            f"  [{index}] {_node_identity(node)}: {inputs} -> {outputs} "
+            f"(op-type-supported={supported})"
+        )
+    print("graph outputs:")
+    for value in graph.output:
+        print(f"  {value.name}: {_shape_text(value)}")
+
+
+def import_onnx(input_path: Path, output_path: Path, function_name: str) -> None:
+    model = _load_model(input_path)
     graph = model.graph
     initializer_names = {initializer.name for initializer in graph.initializer}
     initializers = {initializer.name: initializer for initializer in graph.initializer}
@@ -138,8 +200,10 @@ def import_onnx(input_path: Path, output_path: Path, function_name: str) -> None
 
     pending_quantize: dict[str, tuple[str, str, str]] = {}
     for node_index, node in enumerate(graph.node):
-        if node.op_type not in SUPPORTED_OPS:
-            raise ValueError(f"node {node_index}: unsupported ONNX op {node.op_type}")
+        if not _is_supported_node(node):
+            raise ValueError(
+                f"node {node_index}: unsupported ONNX op {_node_identity(node)}"
+            )
         if node.op_type == "Split":
             if len(node.input) != 1 or len(node.output) != 2:
                 raise ValueError("Split requires one input and exactly two outputs")
@@ -330,10 +394,29 @@ def import_onnx(input_path: Path, output_path: Path, function_name: str) -> None
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("input", type=Path)
-    parser.add_argument("-o", "--output", required=True, type=Path)
+    parser.add_argument("input", nargs="?", type=Path)
+    parser.add_argument("-o", "--output", type=Path)
     parser.add_argument("--function", default="predict")
+    parser.add_argument(
+        "--analyze", action="store_true",
+        help="print the inferred ONNX graph and op-type recognition results",
+    )
+    parser.add_argument(
+        "--list-supported-ops", action="store_true",
+        help="list supported ONNX op types and their restrictions",
+    )
     args = parser.parse_args()
+    if args.list_supported_ops:
+        for name, restriction in SUPPORTED_OPS.items():
+            print(f"{name}: {restriction}")
+        return
+    if args.input is None:
+        parser.error("input is required unless --list-supported-ops is used")
+    if args.analyze:
+        analyze_onnx(args.input)
+        return
+    if args.output is None:
+        parser.error("--output is required when importing a model")
     import_onnx(args.input, args.output, args.function)
 
 

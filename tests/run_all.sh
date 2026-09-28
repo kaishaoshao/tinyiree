@@ -23,6 +23,8 @@ opt="$build_dir/bin/tiny-iree-opt"
 runtime="$build_dir/bin/tiny-iree-run-module"
 
 bash "$repo_dir/tests/run_e2e.sh" "$opt" "$runtime"
+bash "$repo_dir/tests/run_frontend_recognition_e2e.sh" \
+  "$python" "$opt" "$runtime"
 bash "$repo_dir/tests/run_pipeline_conformance_e2e.sh" \
   "$python" "$opt" "$runtime"
 bash "$repo_dir/tests/run_onnx_aot_e2e.sh" "$python" "$opt" "$runtime"

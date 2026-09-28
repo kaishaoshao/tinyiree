@@ -23,6 +23,10 @@ cmake --build "$build_dir" \
 tmp="$(mktemp -d "${TMPDIR:-/tmp}/tiny-iree-onnx.XXXXXX")"
 trap 'rm -rf "$tmp"' EXIT
 
+bash "$repo_dir/tests/run_frontend_recognition_e2e.sh" \
+  "$python" "$build_dir/bin/tiny-iree-opt" \
+  "$build_dir/bin/tiny-iree-run-module"
+
 "$python" "$repo_dir/tools/generate_mlp_onnx.py" -o "$tmp/mlp.onnx"
 "$python" "$repo_dir/tools/tiny_iree_compile.py" "$tmp/mlp.onnx" \
   -o "$tmp/mlp.tiree" --cpu-codegen=scalar
