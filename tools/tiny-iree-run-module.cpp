@@ -2,11 +2,13 @@
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <filesystem>
 #include <limits>
 #include <memory>
+#include <numeric>
 #include <optional>
 #include <string>
 #include <utility>
@@ -21,6 +23,7 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/bit.h"
 #include "llvm/Support/CommandLine.h"
+#include "llvm/Support/Format.h"
 #include "llvm/Support/InitLLVM.h"
 #include "llvm/Support/JSON.h"
 #include "llvm/Support/MemoryBuffer.h"
@@ -231,6 +234,14 @@ llvm::cl::opt<std::string> inputValues(
 llvm::cl::opt<std::string> executableFilename(
     "executable", llvm::cl::desc("Native HAL executable dynamic library"),
     llvm::cl::init(""));
+llvm::cl::opt<int> benchmarkWarmup(
+    "benchmark-warmup",
+    llvm::cl::desc("Warmup invocations before steady-state measurement"),
+    llvm::cl::init(0));
+llvm::cl::opt<int> benchmarkRepetitions(
+    "benchmark-repetitions",
+    llvm::cl::desc("Measured steady-state invocations; zero disables benchmark"),
+    llvm::cl::init(0));
 
 class NativeExecutable {
  public:
@@ -957,7 +968,8 @@ Tensor tensorFromConstant(mlir::arith::ConstantOp constant) {
   return tensor;
 }
 
-int run(mlir::ModuleOp module, const NativeExecutable *nativeExecutable) {
+int run(mlir::ModuleOp module, const NativeExecutable *nativeExecutable,
+        bool printOutput = true) {
   auto function = module.lookupSymbol<mlir::func::FuncOp>(functionName);
   if (!function || function.empty()) {
     llvm::errs() << "function not found or has no body: " << functionName
@@ -1120,18 +1132,20 @@ int run(mlir::ModuleOp module, const NativeExecutable *nativeExecutable) {
           return EXIT_FAILURE;
         }
       }
-      llvm::outs() << "backend: "
-                   << (nativeExecutable ? "native-aot" : "interpreter")
-                   << "\n";
-      llvm::outs() << "resources: peak=" << peakResourceBytes
-                   << "B live=" << liveResourceBytes << "B\n";
-      llvm::outs() << "allocator: new=" << allocator.getNewAllocations()
-                   << " reused=" << allocator.getReusedAllocations() << "\n";
-      for (auto [index, value] : llvm::enumerate(returnOp.getOperands())) {
-        printTensorResult(values.find(value)->second,
-                          returnOp.getNumOperands() == 1
-                              ? std::optional<size_t>()
-                              : std::optional<size_t>(index));
+      if (printOutput) {
+        llvm::outs() << "backend: "
+                     << (nativeExecutable ? "native-aot" : "interpreter")
+                     << "\n";
+        llvm::outs() << "resources: peak=" << peakResourceBytes
+                     << "B live=" << liveResourceBytes << "B\n";
+        llvm::outs() << "allocator: new=" << allocator.getNewAllocations()
+                     << " reused=" << allocator.getReusedAllocations() << "\n";
+        for (auto [index, value] : llvm::enumerate(returnOp.getOperands())) {
+          printTensorResult(values.find(value)->second,
+                            returnOp.getNumOperands() == 1
+                                ? std::optional<size_t>()
+                                : std::optional<size_t>(index));
+        }
       }
       return EXIT_SUCCESS;
     }
@@ -1145,7 +1159,8 @@ int run(mlir::ModuleOp module, const NativeExecutable *nativeExecutable) {
 }
 
 int runBytecode(llvm::ArrayRef<BytecodeFunction> functions,
-                const NativeExecutable *nativeExecutable) {
+                const NativeExecutable *nativeExecutable,
+                bool printOutput = true) {
   auto function = std::find_if(
       functions.begin(), functions.end(),
       [](const BytecodeFunction &candidate) {
@@ -1304,18 +1319,21 @@ int runBytecode(llvm::ArrayRef<BytecodeFunction> functions,
         return EXIT_FAILURE;
       }
     }
-    llvm::outs() << "backend: "
-                 << (nativeExecutable ? "native-aot" : "interpreter") << "\n";
-    llvm::outs() << "vm: tiny-bytecode-v1\n";
-    llvm::outs() << "resources: peak=" << peakResourceBytes
-                 << "B live=" << liveResourceBytes << "B\n";
-    llvm::outs() << "allocator: new=" << allocator.getNewAllocations()
-                 << " reused=" << allocator.getReusedAllocations() << "\n";
-    for (auto [index, outputId] : llvm::enumerate(returnOp.values)) {
-      printTensorResult(values.find(outputId)->second,
-                        returnOp.values.size() == 1
-                            ? std::optional<size_t>()
-                            : std::optional<size_t>(index));
+    if (printOutput) {
+      llvm::outs() << "backend: "
+                   << (nativeExecutable ? "native-aot" : "interpreter")
+                   << "\n";
+      llvm::outs() << "vm: tiny-bytecode-v1\n";
+      llvm::outs() << "resources: peak=" << peakResourceBytes
+                   << "B live=" << liveResourceBytes << "B\n";
+      llvm::outs() << "allocator: new=" << allocator.getNewAllocations()
+                   << " reused=" << allocator.getReusedAllocations() << "\n";
+      for (auto [index, outputId] : llvm::enumerate(returnOp.values)) {
+        printTensorResult(values.find(outputId)->second,
+                          returnOp.values.size() == 1
+                              ? std::optional<size_t>()
+                              : std::optional<size_t>(index));
+      }
     }
     return EXIT_SUCCESS;
   }
@@ -1324,11 +1342,60 @@ int runBytecode(llvm::ArrayRef<BytecodeFunction> functions,
   return EXIT_FAILURE;
 }
 
+template <typename Invoke>
+int runOrBenchmark(Invoke &&invoke) {
+  if (benchmarkRepetitions == 0) return invoke(/*printOutput=*/true);
+
+  for (int i = 0; i < benchmarkWarmup; ++i) {
+    if (invoke(/*printOutput=*/false) != EXIT_SUCCESS) return EXIT_FAILURE;
+  }
+
+  std::vector<double> latencies;
+  latencies.reserve(static_cast<size_t>(benchmarkRepetitions));
+  for (int i = 0; i < benchmarkRepetitions; ++i) {
+    auto start = std::chrono::steady_clock::now();
+    int result = invoke(/*printOutput=*/false);
+    auto end = std::chrono::steady_clock::now();
+    if (result != EXIT_SUCCESS) return result;
+    latencies.push_back(
+        std::chrono::duration<double, std::micro>(end - start).count());
+  }
+
+  std::sort(latencies.begin(), latencies.end());
+  auto percentile = [&](double fraction) {
+    double position = fraction * static_cast<double>(latencies.size() - 1);
+    size_t lower = static_cast<size_t>(std::floor(position));
+    size_t upper = static_cast<size_t>(std::ceil(position));
+    double weight = position - static_cast<double>(lower);
+    return latencies[lower] * (1.0 - weight) + latencies[upper] * weight;
+  };
+  double mean = std::accumulate(latencies.begin(), latencies.end(), 0.0) /
+                static_cast<double>(latencies.size());
+
+  llvm::outs() << "benchmark: steady-state-invocation\n";
+  llvm::outs() << "warmup_iterations: " << benchmarkWarmup << "\n";
+  llvm::outs() << "measured_iterations: " << benchmarkRepetitions << "\n";
+  llvm::outs() << "latency_us_min: " << llvm::format("%.3f", latencies.front())
+               << "\n";
+  llvm::outs() << "latency_us_median: "
+               << llvm::format("%.3f", percentile(0.5)) << "\n";
+  llvm::outs() << "latency_us_p90: "
+               << llvm::format("%.3f", percentile(0.9)) << "\n";
+  llvm::outs() << "latency_us_mean: " << llvm::format("%.3f", mean) << "\n";
+  return EXIT_SUCCESS;
+}
+
 }  // namespace
 
 int main(int argc, char **argv) {
   llvm::InitLLVM initLLVM(argc, argv);
   llvm::cl::ParseCommandLineOptions(argc, argv, "tiny-iree VM runtime\n");
+  if (benchmarkWarmup < 0 || benchmarkRepetitions < 0 ||
+      (benchmarkWarmup > 0 && benchmarkRepetitions == 0)) {
+    llvm::errs() << "benchmark counts must be non-negative, and warmup "
+                    "requires measured repetitions\n";
+    return EXIT_FAILURE;
+  }
 
   mlir::DialectRegistry registry;
   registry.insert<mlir::arith::ArithDialect, mlir::func::FuncDialect>();
@@ -1364,7 +1431,9 @@ int main(int argc, char **argv) {
                  reinterpret_cast<const char *>(byteData.data()))) {
     std::vector<BytecodeFunction> functions;
     if (!parseBytecode(byteData, functions)) return EXIT_FAILURE;
-    return runBytecode(functions, nativeExecutablePtr);
+    return runOrBenchmark([&](bool printOutput) {
+      return runBytecode(functions, nativeExecutablePtr, printOutput);
+    });
   }
 
   llvm::SourceMgr sourceManager;
@@ -1372,5 +1441,7 @@ int main(int argc, char **argv) {
   mlir::OwningOpRef<mlir::ModuleOp> module =
       mlir::parseSourceFile<mlir::ModuleOp>(sourceManager, &context);
   if (!module) return EXIT_FAILURE;
-  return run(*module, nativeExecutablePtr);
+  return runOrBenchmark([&](bool printOutput) {
+    return run(*module, nativeExecutablePtr, printOutput);
+  });
 }
